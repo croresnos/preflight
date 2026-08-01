@@ -14,6 +14,7 @@ after that.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import sys
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ class PluginRejected(RuntimeError):
 
 
 PluginLoader = Callable[[], object]
-EntrypointImporter = Callable[[str], object]
+EntrypointImporter = Callable[[str, Path], object]
 
 
 @dataclass(frozen=True)
@@ -96,9 +97,77 @@ class RegisteredPlugin:
     origin: str
 
 
-def _import_entrypoint(entrypoint: str) -> object:
+def _import_chain(module_name: str) -> tuple[str, ...]:
+    """``"a.b.c"`` -> ``("a", "a.b", "a.b.c")`` -- outermost package first."""
+    parts = module_name.split(".")
+    return tuple(".".join(parts[: index + 1]) for index in range(len(parts)))
+
+
+def _module_file(module_name: str) -> Path | None:
+    """Locate a module's file on disk without executing the module.
+
+    ``find_spec`` consults the import machinery but does not run the target.
+    Returns ``None`` when there is no file to point at: built-in modules report
+    ``origin == "built-in"``, frozen modules ``"frozen"``, and namespace packages
+    report ``None``. A loader that trusts exactly one directory has no business
+    accepting any of them, so all three become a refusal at the call site.
+    """
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ValueError):
+        return None
+    origin = getattr(spec, "origin", None)
+    if not origin:
+        return None
+    path = Path(origin)
+    return path.resolve() if path.is_file() else None
+
+
+def _import_entrypoint(entrypoint: str, trusted_root: Path | str) -> object:
+    """Import an entrypoint only if its module lives inside ``trusted_root``.
+
+    The manifest *file* is confined to the trusted root by the caller. The
+    entrypoint *string* is not: :class:`~preflight.manifest.PluginPackageManifest`
+    validates its shape, not its location, so without this a manifest sitting
+    inside the trusted root could name any importable module on ``sys.path``.
+
+    The module is therefore resolved to a file before it is imported, and each
+    ancestor package is cleared before its child is looked up -- ``find_spec``
+    on a dotted name imports the parent as a side effect, so the parent has to
+    pass the boundary first. On no path through this function does code outside
+    the trusted root execute.
+
+    preflight never modifies ``sys.path``. Putting the plugin directory on the
+    import path is the host's job, and doing it here would mean mutating global
+    import state as a side effect of a security check.
+    """
     module_name, attribute = entrypoint.split(":", 1)
+    root = Path(trusted_root).resolve()
+
+    for ancestor in _import_chain(module_name):
+        located = _module_file(ancestor)
+        if located is None:
+            raise PluginRejected(
+                f"entrypoint module '{ancestor}' has no file on disk, so it cannot "
+                f"be shown to live inside the trusted plugin root '{root}'"
+            )
+        if not located.is_relative_to(root):
+            raise PluginRejected(
+                f"entrypoint module '{ancestor}' resolves to '{located}', which is "
+                f"outside the trusted plugin root '{root}'"
+            )
+
     module = importlib.import_module(module_name)
+
+    # Defence in depth: re-check what actually loaded. Resolution and import are
+    # two steps, and sys.modules is global mutable state in between them.
+    loaded_from = getattr(module, "__file__", None)
+    if loaded_from is None or not Path(loaded_from).resolve().is_relative_to(root):
+        raise PluginRejected(
+            f"entrypoint module '{module_name}' was imported from '{loaded_from}', "
+            f"which is outside the trusted plugin root '{root}'"
+        )
+
     exported = getattr(module, attribute)
     return exported() if callable(exported) else exported
 
@@ -185,6 +254,8 @@ class PluginRegistry:
         # Nothing above this line has run a line of the plugin's code.
         try:
             instance = loader()
+        except PluginRejected:
+            raise  # already a refusal; do not relabel it as a malfunction
         except Exception as exc:
             raise PluginRejected(
                 f"failed to load plugin package '{package.package_id}' from {origin}: {exc}"
@@ -224,7 +295,12 @@ class PluginRegistry:
         trusted_root: Path | str,
         importer: EntrypointImporter = _import_entrypoint,
     ) -> RegisteredPlugin:
-        """Load one manifest confined to ``trusted_root`` and then its entry point."""
+        """Load one manifest confined to ``trusted_root`` and then its entry point.
+
+        ``importer`` is a seam for tests and for hosts with their own import
+        rules. Note what that means: entrypoint confinement is a property of the
+        default importer, so a host that supplies its own owns that decision.
+        """
         path = Path(manifest_path).resolve()
         root = Path(trusted_root).resolve()
         if not path.is_relative_to(root):
@@ -247,7 +323,7 @@ class PluginRegistry:
 
         return self.register(
             package,
-            lambda: importer(package.entrypoint),
+            lambda: importer(package.entrypoint, root),
             origin=str(path),
         )
 

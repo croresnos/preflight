@@ -217,7 +217,7 @@ def test_manifest_file_is_confined_and_validated_before_import(tmp_path: Path):
     )
     imports: list[str] = []
 
-    def importer(entrypoint: str):
+    def importer(entrypoint: str, _trusted_root: Path):
         imports.append(entrypoint)
         return _Plugin(package.plugin)
 
@@ -250,7 +250,7 @@ def test_invalid_or_restricted_manifest_never_reaches_the_importer(tmp_path: Pat
     )
     imported = False
 
-    def importer(_entrypoint: str):
+    def importer(_entrypoint: str, _trusted_root: Path):
         nonlocal imported
         imported = True
         return _Plugin(restricted_package.plugin)
