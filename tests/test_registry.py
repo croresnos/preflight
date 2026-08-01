@@ -1,0 +1,266 @@
+"""Plugin ABI and loading-boundary tests.
+
+The assertion that matters in this file is ``assert loaded is False``. It does
+not say "an error was raised" -- it says the plugin's code never ran. Every
+rejection path is tested that way on purpose.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from preflight import (
+    Edition,
+    Plugin,
+    PluginManifest,
+    PluginPackageManifest,
+    PluginRegistry,
+    PluginRejected,
+    public_build,
+)
+
+
+def _package(
+    *,
+    package_id: str = "example.mail.test",
+    plugin_id: str = "mail.test",
+    visibility: str = "public",
+    release_ring: str = "stable",
+    entrypoint: str = "example_mail.plugin:plugin",
+) -> PluginPackageManifest:
+    return PluginPackageManifest.model_validate(
+        {
+            "package_id": package_id,
+            "core_api_version": "1.0",
+            "visibility": visibility,
+            "release_ring": release_ring,
+            "entrypoint": entrypoint,
+            "plugin": {
+                "plugin_id": plugin_id,
+                "name": "Test Mail",
+                "module_version": "1.0.0",
+                "supported_platforms": ["windows"],
+                "tools": [{"name": f"{plugin_id}.search", "risk": "read"}],
+            },
+        }
+    )
+
+
+class _Plugin:
+    def __init__(self, manifest: PluginManifest):
+        self.manifest = manifest
+
+
+def test_plugin_package_manifest_is_closed_and_has_a_strict_entrypoint():
+    package = _package()
+
+    assert package.schema_version == "1.0"
+    assert package.plugin.plugin_id == "mail.test"
+
+    with pytest.raises(ValidationError):
+        _package(entrypoint="example_mail.plugin")
+
+    with pytest.raises(ValidationError):
+        PluginPackageManifest.model_validate(
+            {**package.model_dump(mode="json"), "arbitrary_code": "exec('no')"}
+        )
+
+    with pytest.raises(ValidationError):
+        _package(visibility="restricted", release_ring="stable")
+
+
+@pytest.mark.parametrize(
+    ("visibility", "release_ring"),
+    [("restricted", "experimental"), ("public", "beta")],
+)
+def test_public_registry_rejects_non_public_modules_before_loading(
+    visibility, release_ring
+):
+    package = _package(visibility=visibility, release_ring=release_ring)
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(package.plugin)
+
+    registry = PluginRegistry(
+        edition=Edition.PUBLIC,
+        platform="windows",
+        allowed_package_ids={package.package_id},
+    )
+
+    with pytest.raises(PluginRejected, match="public build"):
+        registry.register(package, loader, origin="test")
+
+    assert loaded is False
+    assert registry.available() == ()
+
+
+def test_registry_revalidates_mutated_manifests_before_loading():
+    package = _package()
+    package.plugin.plugin_id = ""
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(package.plugin)
+
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+    with pytest.raises(PluginRejected, match="invalid plugin package manifest"):
+        registry.register(package, loader, origin="built-in")
+
+    assert loaded is False
+
+
+def test_public_registry_requires_an_explicit_build_allowlist_before_loading():
+    package = _package()
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(package.plugin)
+
+    registry = public_build(allowed_package_ids=set(), platform="windows")
+
+    with pytest.raises(PluginRejected, match="build allowlist"):
+        registry.register(package, loader, origin="test")
+
+    assert loaded is False
+
+
+def test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions():
+    package = _package()
+    plugin = _Plugin(package.plugin)
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+
+    registered = registry.register(package, lambda: plugin, origin="built-in")
+
+    assert isinstance(registered.instance, Plugin)
+    assert registry.get("mail.test") is plugin
+    assert registry.available() == (package.plugin,)
+    assert registry.tool_owner("mail.test.search") == "mail.test"
+    declared_tool = registry.tool("mail.test.search")
+    assert declared_tool is not None
+    assert declared_tool.risk.value == "read"
+    declared_tool.name = "mutated.outside.registry"
+    assert registry.tool("mail.test.search").name == "mail.test.search"
+    assert registry.manifest("mail.test").plugin_id == "mail.test"
+    listed_manifest = registry.available()[0]
+    listed_manifest.plugin_id = "mutated.outside.registry"
+    assert registry.manifest("mail.test").plugin_id == "mail.test"
+
+    mismatched = _Plugin(package.plugin.model_copy(update={"plugin_id": "mail.wrong"}))
+    other_package = _package(package_id="example.mail.other", plugin_id="mail.other")
+    registry_with_allowlist = public_build(
+        allowed_package_ids={other_package.package_id}, platform="windows"
+    )
+    with pytest.raises(PluginRejected, match="does not match"):
+        registry_with_allowlist.register(
+            other_package, lambda: mismatched, origin="built-in"
+        )
+
+    collision = _package(
+        package_id="example.calendar.test", plugin_id="calendar.test"
+    )
+    collision.plugin.tools[0].name = package.plugin.tools[0].name
+    registry_with_collision_allowlist = public_build(
+        allowed_package_ids={package.package_id, collision.package_id},
+        platform="windows",
+    )
+    registry_with_collision_allowlist.register(
+        package, lambda: plugin, origin="built-in"
+    )
+    with pytest.raises(PluginRejected, match="tool name collision"):
+        registry_with_collision_allowlist.register(
+            collision, lambda: _Plugin(collision.plugin), origin="built-in"
+        )
+
+
+def test_duplicate_declared_tool_names_are_rejected_before_loading():
+    package = _package()
+    package.plugin.tools.append(package.plugin.tools[0].model_copy())
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(package.plugin)
+
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+    with pytest.raises(PluginRejected, match="duplicate tool name"):
+        registry.register(package, loader, origin="built-in")
+
+    assert loaded is False
+
+
+def test_manifest_file_is_confined_and_validated_before_import(tmp_path: Path):
+    trusted_root = tmp_path / "plugins"
+    package_root = trusted_root / "mail"
+    package_root.mkdir(parents=True)
+    package = _package()
+    manifest_path = package_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(package.model_dump(mode="json")), encoding="utf-8"
+    )
+    imports: list[str] = []
+
+    def importer(entrypoint: str):
+        imports.append(entrypoint)
+        return _Plugin(package.plugin)
+
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+    registry.load_manifest_file(
+        manifest_path, trusted_root=trusted_root, importer=importer
+    )
+
+    assert imports == [package.entrypoint]
+
+    outside = tmp_path / "outside.json"
+    outside.write_text(manifest_path.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(PluginRejected, match="trusted plugin root"):
+        registry.load_manifest_file(
+            outside, trusted_root=trusted_root, importer=importer
+        )
+
+
+def test_invalid_or_restricted_manifest_never_reaches_the_importer(tmp_path: Path):
+    trusted_root = tmp_path / "plugins"
+    trusted_root.mkdir()
+    restricted_package = _package(
+        visibility="restricted", release_ring="experimental"
+    )
+    manifest_path = trusted_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(restricted_package.model_dump(mode="json")), encoding="utf-8"
+    )
+    imported = False
+
+    def importer(_entrypoint: str):
+        nonlocal imported
+        imported = True
+        return _Plugin(restricted_package.plugin)
+
+    registry = public_build(
+        allowed_package_ids={restricted_package.package_id}, platform="windows"
+    )
+    with pytest.raises(PluginRejected, match="public build"):
+        registry.load_manifest_file(
+            manifest_path, trusted_root=trusted_root, importer=importer
+        )
+
+    assert imported is False
