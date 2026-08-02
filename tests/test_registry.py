@@ -101,6 +101,25 @@ def test_public_registry_rejects_non_public_modules_before_loading(
     assert registry.available() == ()
 
 
+def test_a_plugin_that_does_not_support_the_host_platform_is_refused_before_loading():
+    package = _package()  # declares windows and nothing else
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(package.plugin)
+
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="linux"
+    )
+    with pytest.raises(PluginRejected, match="does not support platform 'linux'"):
+        registry.register(package, loader, origin="test")
+
+    assert loaded is False
+    assert registry.available() == ()
+
+
 def test_registry_revalidates_mutated_manifests_before_loading():
     package = _package()
     package.plugin.plugin_id = ""
@@ -206,6 +225,45 @@ def test_duplicate_declared_tool_names_are_rejected_before_loading():
     assert loaded is False
 
 
+def test_a_second_package_claiming_a_registered_plugin_id_is_refused_before_loading():
+    first = _package()
+    second = _package(package_id="example.mail.clone")
+    # Give it a distinct tool name so the plugin_id check is unambiguously the
+    # thing that fires, rather than the collision check downstream of it.
+    second.plugin.tools[0].name = "mail.clone.search"
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(second.plugin)
+
+    registry = public_build(
+        allowed_package_ids={first.package_id, second.package_id},
+        platform="windows",
+    )
+    registry.register(first, lambda: _Plugin(first.plugin), origin="built-in")
+
+    with pytest.raises(PluginRejected, match="is already registered"):
+        registry.register(second, loader, origin="test")
+
+    assert loaded is False
+    assert len(registry.available()) == 1
+
+
+def test_an_entrypoint_returning_something_other_than_a_plugin_is_refused():
+    package = _package()
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+
+    with pytest.raises(PluginRejected, match="does not implement Plugin"):
+        registry.register(package, lambda: object(), origin="test")
+
+    assert registry.available() == ()
+    assert registry.tool_owner("mail.test.search") is None
+
+
 def test_manifest_file_is_confined_and_validated_before_import(tmp_path: Path):
     trusted_root = tmp_path / "plugins"
     package_root = trusted_root / "mail"
@@ -236,6 +294,34 @@ def test_manifest_file_is_confined_and_validated_before_import(tmp_path: Path):
         registry.load_manifest_file(
             outside, trusted_root=trusted_root, importer=importer
         )
+
+
+def test_an_oversized_manifest_is_refused_before_it_is_even_parsed(tmp_path: Path):
+    trusted_root = tmp_path / "plugins"
+    trusted_root.mkdir()
+    manifest_path = trusted_root / "manifest.json"
+    # Deliberately not JSON. If the size cap fires first the refusal names the
+    # cap; if it did not, the refusal would be a parse error instead, and this
+    # test would be measuring the wrong check.
+    manifest_path.write_text(
+        "x" * (PluginRegistry.MAX_MANIFEST_BYTES + 1), encoding="utf-8"
+    )
+    imported = False
+
+    def importer(_entrypoint: str, _trusted_root: Path):
+        nonlocal imported
+        imported = True
+        raise AssertionError("unreachable")
+
+    registry = public_build(
+        allowed_package_ids={"example.mail.test"}, platform="windows"
+    )
+    with pytest.raises(PluginRejected, match="exceeds 262144 bytes"):
+        registry.load_manifest_file(
+            manifest_path, trusted_root=trusted_root, importer=importer
+        )
+
+    assert imported is False
 
 
 def test_invalid_or_restricted_manifest_never_reaches_the_importer(tmp_path: Path):
