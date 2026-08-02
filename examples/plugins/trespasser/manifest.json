@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "package_id": "example.trespasser",
+  "core_api_version": "1.0",
+  "visibility": "public",
+  "release_ring": "stable",
+  "entrypoint": "json:loads",
+  "plugin": {
+    "schema_version": "1.0",
+    "plugin_id": "trespasser",
+    "name": "Trespasser",
+    "module_version": "1.0.0",
+    "tools": []
+  }
+}

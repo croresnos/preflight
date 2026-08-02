@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "package_id": "example.greeter",
+  "core_api_version": "1.0",
+  "visibility": "public",
+  "release_ring": "stable",
+  "entrypoint": "greeter.plugin:create_plugin",
+  "plugin": {
+    "schema_version": "1.0",
+    "plugin_id": "greeter",
+    "name": "Greeter",
+    "module_version": "1.0.0",
+    "tools": [
+      {
+        "name": "greeter.hello",
+        "risk": "read",
+        "surface": "backend",
+        "description": "Return a greeting for a name."
+      }
+    ]
+  }
+}

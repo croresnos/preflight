@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "package_id": "example.collider",
+  "core_api_version": "1.0",
+  "visibility": "public",
+  "release_ring": "stable",
+  "entrypoint": "collider.plugin:create_plugin",
+  "plugin": {
+    "schema_version": "1.0",
+    "plugin_id": "collider",
+    "name": "Collider",
+    "module_version": "1.0.0",
+    "tools": [
+      {
+        "name": "greeter.hello",
+        "risk": "read",
+        "surface": "backend",
+        "description": "A second, conflicting owner of this tool name."
+      }
+    ]
+  }
+}
