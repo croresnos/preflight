@@ -10,29 +10,61 @@ preflight moves every decision in front of the import. It reads a JSON manifest,
 python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
 ```
 
-There are two ways to use it.
+## What it actually is
 
-**On the command line**, to read a package's paperwork before you install it. This imports nothing, so it is safe to point at code you have not read:
+**preflight is code that lives inside your program and runs every time your program starts, deciding which plugins are allowed to load before any of their code executes.**
 
-```
-preflight check ./some-plugin
-```
-
-**As a library**, to gate plugins at runtime inside your own application:
+It is not something you run once at a terminal to inspect a download. It is a door your application has:
 
 ```python
-from preflight import load_plugins
+from preflight import Policy, ToolRisk, load_plugins
 
-result = load_plugins("plugins", allow=["example.greeter"])
-print(result)
-greeter = result.plugins["greeter"]
+result = load_plugins(
+    "plugins",
+    allow=["acme.weather", "acme.notes"],       # only these two, ever
+    policy=Policy(refuse_tool_risks={ToolRisk.DESTRUCTIVE, ToolRisk.FINANCIAL}),
+)
 ```
+
+Ten plugin folders can be sitting in `plugins/`. Eight of them are never imported, because they are not on the list. preflight does not hand you an opinion about them — **it refuses**, and it refuses while their code is still inert text on disk.
+
+That is the difference between this and inspecting something by hand. A hand inspection is a snapshot of one afternoon. When that plugin updates next week, when someone drops a new folder into `plugins/`, when a package quietly changes what it claims — the snapshot knows nothing about any of it. The gate is still standing.
+
+### The two moments
+
+There are two points in time where preflight shows up, and confusing them is the single easiest way to misread this project:
+
+| When | What | Who runs it |
+|---|---|---|
+| **Once**, when you adopt a plugin | `preflight check`, `preflight init` | you, at a terminal |
+| **Every launch, for the life of the program** | `load_plugins(...)` | your code, automatically |
+
+The second row is preflight. The first row is the on-ramp to it — a way to read what you are being asked to trust, and to write down what you will permit, before the gate in the second row ever sees it.
+
+### What preflight can do
+
+**Inside your program, at every startup.** This is the part that matters:
+
+- **Refuse a plugin that is not on your allowlist.** `allow` is required and has no wildcard. A folder sitting in the directory but absent from the list is discovered, reported, and never imported.
+- **Decide the load order,** because the first plugin to claim a tool name keeps it. Precedence follows the order you wrote, not the filesystem's alphabetical glob.
+- **Refuse a plugin whose entrypoint points outside the trusted directory,** resolved with `find_spec`, which locates a module's file without executing it.
+- **Refuse a plugin that declares a risk you do not accept** — `refuse_tool_risks`, checked before the import.
+- **Refuse a plugin that is the wrong tier or the wrong platform** for this build. Optional; see [Release tiers](#release-tiers-optional).
+- **Refuse a plugin whose plugin id or tool names collide** with something already registered.
+- **Catch a plugin that lied,** by comparing what it reports once loaded against the manifest it declared. This is the one check that necessarily happens after the import, because there has to be an object to ask.
+- **Tell you which refusals happened before the plugin ran and which after** — `Outcome.code_ran`, recorded from the import itself rather than inferred from the error.
+
+**At a terminal, when you are adopting something new:**
+
+- **`preflight check ./thing`** — read a package's manifest and every tool it claims, importing nothing at all. Exits non-zero when a package would be refused, so it drops into a script or a pre-commit hook without anyone reading the output.
+- **`preflight init ./thing`** — write a manifest for a package that has none, recording what *you* permit. This is how a third-party package that never heard of preflight gets adopted on your terms.
+- **`preflight demo`** — load four bundled example plugins and refuse three of them, so the refusals are something you watch rather than read about.
 
 ### What preflight is not
 
-Read this before the rest, because the two halves above are easy to over-read.
+Read this before the rest, because everything above is easy to over-read.
 
-- **It is not a scanner.** `preflight check` never reads the package's *code*. It reads the package's *declaration about itself* and tells you whether that declaration is coherent. It cannot detect malware, and it has no opinion on whether a package does what it claims.
+- **It is not a scanner.** Nothing here ever reads a package's *code* — not the gate, not the CLI. preflight reads a package's *declaration about itself* and enforces what you said you would accept. It cannot detect malware, and it has no opinion on whether a package does what it claims. It is a permission system, not a detection system.
 - **It is not a sandbox.** Once a plugin is imported it is ordinary Python with the full run of your process. preflight decides *whether* to import and has no power after that.
 - **It only works where there is a manifest.** That is not a gap waiting to be filled — it is the trade. The description has to live outside the code, so someone has to write it: the plugin author, because your application requires it, or you, with `preflight init`, when you adopt something that never heard of preflight. Either way a manifest records a judgement, and preflight enforces that judgement rather than forming one of its own.
 
@@ -225,7 +257,11 @@ result = load_plugins(
 
 ---
 
-## Checking a package before you install it
+## Adopting a package you did not write
+
+Everything above happens inside your program. This section is the other moment — you at a terminal, deciding whether to let something new near the gate at all, and writing down the terms if you do. It is the on-ramp, not the product: nothing here protects a running application, because none of it is running when your application is.
+
+### `preflight check`
 
 `preflight check` reads a package's manifest and lists everything it claims the right to do. **It imports nothing** — not the plugin, not `importlib`, not even `find_spec`. The entrypoint is resolved by path arithmetic against the folder on disk, so there is no code path through this command that can cause the inspected package to execute. `tests/test_inspect.py` proves it with a tripwire, on a package that was genuinely importable at the time.
 

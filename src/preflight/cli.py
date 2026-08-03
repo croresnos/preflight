@@ -150,9 +150,22 @@ def _demo(_args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="preflight",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Decide whether a plugin may load from its manifest alone, "
             "before any of its code runs."
+        ),
+        epilog=(
+            "These commands are for the moment you adopt a package you did not\n"
+            "write. They are not the product, and running one protects nothing\n"
+            "later -- none of this is running when your application is.\n"
+            "\n"
+            "The gate itself goes inside your program and runs at every startup:\n"
+            "\n"
+            "    from preflight import load_plugins\n"
+            "    result = load_plugins('plugins', allow=['acme.weather'])\n"
+            "\n"
+            "Packages in that folder but missing from allow are never imported."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
