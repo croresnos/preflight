@@ -2,8 +2,8 @@
 
 Three commands, and the important one is the first::
 
-    preflight check ./some-plugin      # read its paperwork. Executes nothing.
-    preflight init  ./some-plugin      # write down what you will permit it to do
+    preflight check  ./some-plugin     # read its paperwork. Executes nothing.
+    preflight create ./some-plugin     # write down what you will permit it to do
     preflight demo                     # watch three plugins get refused
 
 ``check`` is the command you run on something you downloaded and have not read.
@@ -113,8 +113,13 @@ def _check(args: argparse.Namespace) -> int:
     return 0 if would_load else 1
 
 
-def _init(args: argparse.Namespace) -> int:
-    folder = Path(args.path)
+def _create(args: argparse.Namespace) -> int:
+    # Resolved, because everything below is derived from the folder's *name* --
+    # the slug, the guessed entrypoint, the rename advice. `Path('.').name` is
+    # the empty string, so `preflight create .` from inside the package, which
+    # is the obvious way to run this, would otherwise be told that '' cannot be
+    # a Python package name. `check` resolves for the same reason.
+    folder = Path(args.path).resolve()
     if not folder.is_dir():
         print(f"preflight: '{folder}' is not a directory", file=sys.stderr)
         return 2
@@ -285,19 +290,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_refuse_flag(check)
     check.set_defaults(handler=_check)
 
-    init = commands.add_parser(
-        "init",
+    create = commands.add_parser(
+        "create",
         help="write a manifest for a package that has none",
         description=(
             "Writes a manifest.json recording what you permit this package to do. "
             "preflight does not read the package's code to fill it in."
         ),
     )
-    init.add_argument("path", help="the plugin package directory")
-    init.add_argument("--entrypoint", help="module:attribute to call, e.g. pkg.plugin:build")
-    init.add_argument("--package-id", help="dotted package id, e.g. acme.weather")
-    init.add_argument("--force", action="store_true", help="overwrite an existing manifest")
-    init.set_defaults(handler=_init)
+    create.add_argument("path", help="the plugin package directory")
+    create.add_argument("--entrypoint", help="module:attribute to call, e.g. pkg.plugin:build")
+    create.add_argument("--package-id", help="dotted package id, e.g. acme.weather")
+    create.add_argument("--force", action="store_true", help="overwrite an existing manifest")
+    create.set_defaults(handler=_create)
 
     demo = commands.add_parser(
         "demo",

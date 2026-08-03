@@ -36,7 +36,7 @@ There are two points in time where preflight shows up, and confusing them is the
 
 | When | What | Who runs it |
 |---|---|---|
-| **Once**, when you adopt a plugin | `preflight check`, `preflight init` | you, at a terminal |
+| **Once**, when you adopt a plugin | `preflight check`, `preflight create` | you, at a terminal |
 | **Every launch, for the life of the program** | `load_plugins(...)` | your code, automatically |
 
 The second row is preflight. The first row is the on-ramp to it — a way to read what you are being asked to trust, and to write down what you will permit, before the gate in the second row ever sees it.
@@ -58,7 +58,7 @@ The second row is preflight. The first row is the on-ramp to it — a way to rea
 
 - **`preflight check ./thing`** — read a package's manifest and every tool it claims, importing nothing at all. Exits non-zero when a package would be refused, so it drops into a script or a pre-commit hook without anyone reading the output.
 - **`preflight check ./thing --refuse destructive,financial`** — the same reading, decided against *your* rules. This is not a fourth thing preflight knows how to do; it is `Policy(refuse_tool_risks=...)` from the list above, asked at a terminal instead of at startup.
-- **`preflight init ./thing`** — write a manifest for a package that has none, recording what *you* permit. This is how a third-party package that never heard of preflight gets adopted on your terms.
+- **`preflight create ./thing`** — write a manifest for a package that has none, recording what *you* permit. This is how a third-party package that never heard of preflight gets adopted on your terms.
 - **`preflight demo`** — load five bundled example plugins and refuse three of them, so the refusals are something you watch rather than read about. Add `--refuse destructive` to refuse a fourth.
 
 ### What preflight is not
@@ -67,7 +67,7 @@ Read this before the rest, because everything above is easy to over-read.
 
 - **It is not a scanner.** Nothing here ever reads a package's *code* — not the gate, not the CLI. preflight reads a package's *declaration about itself* and enforces what you said you would accept. It cannot detect malware, and it has no opinion on whether a package does what it claims. It is a permission system, not a detection system.
 - **It is not a sandbox.** Once a plugin is imported it is ordinary Python with the full run of your process. preflight decides *whether* to import and has no power after that.
-- **It only works where there is a manifest.** That is not a gap waiting to be filled — it is the trade. The description has to live outside the code, so someone has to write it: the plugin author, because your application requires it, or you, with `preflight init`, when you adopt something that never heard of preflight. Either way a manifest records a judgement, and preflight enforces that judgement rather than forming one of its own.
+- **It only works where there is a manifest.** That is not a gap waiting to be filled — it is the trade. The description has to live outside the code, so someone has to write it: the plugin author, because your application requires it, or you, with `preflight create`, when you adopt something that never heard of preflight. Either way a manifest records a judgement, and preflight enforces that judgement rather than forming one of its own.
 
 ### Who this is for
 
@@ -343,13 +343,13 @@ preflight check | random-repo\ | nothing was executed
   it is the absence of one.
 
   To adopt it anyway, write down what you will permit it to do:
-      preflight init random-repo
+      preflight create random-repo
 ```
 
-`preflight init` writes a manifest skeleton so you can adopt an unmanaged package on your own terms. Be clear about what it does and does not do: it records **what you permit**, and it does not read the package's code to find out what the package wants. The generated `tools` list is empty, which means the package may expose none until you add them yourself.
+`preflight create` writes a manifest skeleton so you can adopt an unmanaged package on your own terms. Be clear about what it does and does not do: it records **what you permit**, and it does not read the package's code to find out what the package wants. The generated `tools` list is empty, which means the package may expose none until you add them yourself.
 
 ```
-preflight init ./weather
+preflight create ./weather
 preflight check ./weather      # now there is something to check
 ```
 
@@ -664,7 +664,7 @@ An earlier version of this README argued against discovery outright, on the grou
 No, and this is the most important limitation in this README. `check` reads a package's *declaration about itself* and reports whether that declaration is coherent — the manifest parses, the entrypoint points at a file inside the package, these are the tools it claims. It never reads the package's code. A package that describes itself accurately and then does something else passes every check in the command. It is a way to see what you are being asked to trust, not a verdict on whether to trust it.
 
 **What if the thing I downloaded has no manifest?**
-Then `check` will tell you it has nothing to check, which is the honest answer. `preflight init` writes a manifest skeleton so you can adopt the package on your own terms — but note whose judgement that is: the file records what *you* permit, and preflight did not read the code to fill it in.
+Then `check` will tell you it has nothing to check, which is the honest answer. `preflight create` writes a manifest skeleton so you can adopt the package on your own terms — but note whose judgement that is: the file records what *you* permit, and preflight did not read the code to fill it in.
 
 **Do I have to understand editions, visibility, and release rings?**
 No. They exist for applications that ship one plugin folder to several audiences, they are opt-in through `Policy(edition=...)`, and the defaults handle the single-tier case. Mark your plugins `public` / `stable` and the fields stop mattering.

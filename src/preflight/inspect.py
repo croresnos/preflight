@@ -199,7 +199,7 @@ def format_inspection(
             "  it is the absence of one.",
             "",
             "  To adopt it anyway, write down what you will permit it to do:",
-            f"      preflight init {name}",
+            f"      preflight create {name}",
         ]
         return "\n".join(lines)
 
