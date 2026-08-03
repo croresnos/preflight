@@ -57,8 +57,9 @@ The second row is preflight. The first row is the on-ramp to it — a way to rea
 **At a terminal, when you are adopting something new:**
 
 - **`preflight check ./thing`** — read a package's manifest and every tool it claims, importing nothing at all. Exits non-zero when a package would be refused, so it drops into a script or a pre-commit hook without anyone reading the output.
+- **`preflight check ./thing --refuse destructive,financial`** — the same reading, decided against *your* rules. This is not a fourth thing preflight knows how to do; it is `Policy(refuse_tool_risks=...)` from the list above, asked at a terminal instead of at startup.
 - **`preflight init ./thing`** — write a manifest for a package that has none, recording what *you* permit. This is how a third-party package that never heard of preflight gets adopted on your terms.
-- **`preflight demo`** — load four bundled example plugins and refuse three of them, so the refusals are something you watch rather than read about.
+- **`preflight demo`** — load five bundled example plugins and refuse three of them, so the refusals are something you watch rather than read about. Add `--refuse destructive` to refuse a fourth.
 
 ### What preflight is not
 
@@ -253,7 +254,7 @@ result = load_plugins(
 )
 ```
 
-`refuse_tool_risks` is the one place preflight acts on a declared risk level, and only because a host asked it to. It is checked before the import, so a package declaring a refused risk never runs. See [Release tiers](#release-tiers-optional) for `Policy(edition=...)`, which most hosts never need.
+`refuse_tool_risks` is the one place preflight acts on a declared risk level, and only because a host asked it to. It is checked before the import, so a package declaring a refused risk never runs. The command line can ask the same question of a package you are considering — [`preflight check --refuse`](#--refuse-which-is-your-rule-and-not-preflights) — but only this line enforces it. See [Release tiers](#release-tiers-optional) for `Policy(edition=...)`, which most hosts never need.
 
 ---
 
@@ -293,6 +294,41 @@ The `!` marks every tool declaring something beyond a plain read. **These are cl
 
 `check` exits `0` when every package would be accepted, `1` when any would be refused, and `2` on a bad path — so it works in a script without anyone reading the output.
 
+#### `--refuse`, which is your rule and not preflight's
+
+By default `check` reports and does not judge: a package declaring a tool that deletes things is *shown to you*, marked `!`, and left for you to decide about. `--refuse` is how you make that decision once and let the exit code carry it:
+
+```
+preflight check ./janitor --refuse destructive
+```
+
+```
+preflight check | janitor\ | nothing was executed
+
+  manifest      valid
+  package id    example.janitor
+  plugin        Janitor 1.0.0  (id: janitor)
+  tier          public, stable ring
+  entrypoint    janitor.plugin:create_plugin
+                -> janitor\plugin.py  (inside this folder)
+
+  declares 1 tool
+    X janitor.purge_cache  destructive  deletes things
+
+  1 tool declares a risk you refused: janitor.purge_cache (destructive)
+  A host running Policy(refuse_tool_risks={ToolRisk.DESTRUCTIVE}) would
+  refuse this package before importing it.
+
+  Paperwork is consistent, and this package would still be refused --
+  by your rule, not by preflight's. Its code would never be imported.
+```
+
+Exit `1`, on a package with nothing wrong with it. That is the intended result: the paperwork is in order and you said no anyway.
+
+The flag takes a comma-separated list and is repeatable (`--refuse destructive,financial` and `--refuse destructive --refuse financial` are the same request). An unrecognised risk name is an error, not a silent no-op. Valid names are the [tool risk levels](#tool-risk-levels).
+
+**Note the line naming `Policy(...)`.** It is there because this command decides nothing that lasts. Run it in a pre-commit hook and it will stop a package entering your repository; it will not stop one loading at runtime, because it is not running then. The same rule enforced by the gate is [`Policy(refuse_tool_risks=...)`](#settings), and that is where it takes effect.
+
 ### When there is no manifest
 
 This is the common case for something you just downloaded:
@@ -321,11 +357,41 @@ It refuses to overwrite an existing manifest without `--force`, and it refuses o
 
 ### `preflight demo`
 
-Loads the four bundled example plugins and refuses three of them, so you can see the refusals rather than read about them:
+Loads the five bundled example plugins and refuses three of them, so you can see the refusals rather than read about them:
 
 ```
 preflight demo
 ```
+
+The output is [below](#worked-examples). Run it again with a rule attached and a fourth plugin is refused:
+
+```
+preflight demo --refuse destructive
+```
+
+```
+  [greeter] top-level plugin code is executing
+  [impostor] top-level plugin code is executing
+
+preflight | plugins\ | 5 packages found
+
+  LOADED   greeter     Greeter 1.0.0 - 1 tool
+  REFUSED  trespasser  never imported
+                       entrypoint module 'json' resolves to '<your-python>/Lib/json/__init__.py',
+                       which is outside the trusted plugin root '.../examples/plugins'
+  REFUSED  collider    never imported
+                       tool name collision: 'greeter.hello' is already owned by 'greeter'
+  REFUSED  impostor    imported, then rejected
+                       runtime manifest for 'example.impostor' does not match its validated package manifest
+  REFUSED  janitor     never imported
+                       package 'example.janitor' declares tool 'janitor.purge_cache' with risk 'destructive', which this host refuses
+
+  1 loaded, 4 refused -- 3 of the 4 stopped before any of their code ran
+```
+
+`janitor` is a plugin with nothing wrong with it, refused for being honest about something you said you did not want — and refused while still inert on disk, so its tripwire never fires. `impostor` is the comparison: it declares two read-only tools and produces a destructive third one only once loaded, so `--refuse` never saw it. It is caught anyway, but afterwards, by comparing what it reported against what it declared.
+
+**preflight enforces declarations. It does not detect concealment.** Those two rows are the shortest statement of that difference the project can make.
 
 ---
 
@@ -458,6 +524,8 @@ Every row names the test that proves it. If you doubt a row, run that test; if a
 | 18 | On any refusal the registry is unmodified — no partial registration | asserted in every rejection test above (`registry.available() == ()`) |
 | 19 | Everything handed back out is a deep copy; mutating it cannot reach the registry | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
 | 20 | `preflight check` reports on a package without importing it — including one that was importable at the time | `test_inspecting_a_package_never_imports_it`, `test_check_never_imports_the_package_it_is_pointed_at` |
+| 21 | `preflight check --refuse` exits non-zero on a declared risk the caller refused, and reads only declarations — the same limit row 5c has | `test_check_exits_non_zero_on_a_risk_the_caller_refused`, `test_refused_tools_reports_only_what_the_manifest_declared` |
+| 22 | Refusing a risk at the gate stops the plugin with its code still inert, and cannot reach a risk that was never declared | `test_refusing_a_declared_risk_stops_the_janitor_before_it_is_imported`, `test_refusing_a_declared_risk_cannot_reach_a_risk_that_was_never_declared` |
 
 Rows 1–14 are the point of the project. Rows 15–17 are what is left over — checks that *cannot* be made before the import, because they are about an object, and there is no object until something has been imported.
 
@@ -471,7 +539,7 @@ The interesting result is not that the confined importer refuses the plugin. It 
 
 ## Worked examples
 
-`examples/` contains four plugins. One of them deserves to load.
+`examples/` contains five plugins. Three of them do not deserve to load.
 
 Every plugin package prints one line as the very first statement in its `__init__.py`. That turns the abstract claim into something you can *see*: the tripwires that appear in the output are exactly the plugins that got as far as being imported.
 
@@ -482,8 +550,9 @@ python examples/host.py        # or: preflight demo
 ```
   [greeter] top-level plugin code is executing
   [impostor] top-level plugin code is executing
+  [janitor] top-level plugin code is executing
 
-preflight | plugins\ | 4 packages found
+preflight | plugins\ | 5 packages found
 
   LOADED   greeter     Greeter 1.0.0 - 1 tool
   REFUSED  trespasser  never imported
@@ -493,18 +562,19 @@ preflight | plugins\ | 4 packages found
                        tool name collision: 'greeter.hello' is already owned by 'greeter'
   REFUSED  impostor    imported, then rejected
                        runtime manifest for 'example.impostor' does not match its validated package manifest
+  LOADED   janitor     Janitor 1.0.0 - 1 tool
 
-  1 loaded, 3 refused -- 2 of the 3 stopped before any of their code ran
+  2 loaded, 3 refused -- 2 of the 3 stopped before any of their code ran
 
 tool ownership is exclusive
   greeter.hello -> greeter
   impostor.read_profile -> None
 
-calling the one plugin that loaded
+calling a plugin that loaded
   Hello, world.
 ```
 
-The two tripwires print before the report because they fire during loading, while the report is assembled from what happened. Two plugins printed one; two never got the chance.
+The three tripwires print before the report because they fire during loading, while the report is assembled from what happened. Three plugins printed one; two never got the chance.
 
 *(Only the absolute paths are shortened above — they are wherever you cloned this and whichever Python you ran it with. `tests/test_examples.py` runs this same script in a fresh interpreter and pins every outcome, because a quoted output is a claim.)*
 
@@ -513,6 +583,8 @@ The two tripwires print before the report because they fire during loading, whil
 **`trespasser`** — a directory containing a manifest and *no Python at all*. Its manifest sits inside the trusted root and passes every check that reads the file: canonical `package_id`, well-formed entrypoint, an acceptable visibility and ring. The only thing wrong with it is where its entrypoint points. Shape is not location: a manifest is allowed to *name* any module, and whether that module may be imported is decided separately, by resolving it to a file before the import happens.
 
 **`collider`** — a perfectly good plugin that claims a tool name `greeter` already owns. Nothing is wrong with its code, which is the point: **`[collider]` never appears in the output.** It was refused from its manifest file alone, while still sitting inert on disk.
+
+**`janitor`** — the one nothing is wrong with. Its paperwork is faultless and it declares exactly one tool, honestly, at risk `destructive`. It loads here because `examples/host.py` passes no `Policy` and so accepts every declared risk. Run `preflight demo --refuse destructive` and the same package with the same manifest is refused while still inert on disk, and `[janitor]` disappears from the output. Nothing about the plugin changed; the host's rules did. That is the entire shape of the project in one example — preflight does not decide that deleting things is unacceptable, it enforces your decision that it is.
 
 **`impostor`** — the honest one. Its manifest declares two read-only tools; the object it produces reports a third. Its manifest *file* is faultless, so it clears every pre-import check and gets imported — its tripwire fires. This is the one refusal that necessarily lands after the plugin's code has run, because the check compares the object's self-description to the file's, and there is no object to ask until the import has happened.
 
