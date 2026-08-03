@@ -149,6 +149,73 @@ def test_an_unparseable_or_unknown_field_manifest_is_reported_not_ignored(
     assert "run_me" in (inspection.problem or "")
 
 
+def test_another_systems_manifest_is_reported_as_foreign_rather_than_invalid(
+    tmp_path: Path,
+):
+    """A Figma plugin manifest. There is nothing wrong with this file.
+
+    Lots of systems keep a manifest.json, so pointing `check` at one of theirs
+    is a thing people will do on purpose, to find out what preflight is. Calling
+    it INVALID is a false claim about a perfectly good file, and burying that
+    claim under pydantic's dump is how a reader concludes preflight is broken.
+    """
+    folder = _write_package(
+        tmp_path,
+        "design_linter",
+        manifest={
+            "name": "Design Linter",
+            "id": "1234567890123456789",
+            "api": "1.0.0",
+            "main": "code.js",
+            "editorType": ["figma"],
+        },
+    )
+
+    inspection = inspect_package(folder)
+
+    assert inspection.package is None
+    assert inspection.foreign_manifest is True
+    problem = inspection.problem or ""
+    assert "not one of preflight's" in problem
+    assert len(problem.splitlines()) <= 4
+    assert max(len(line) for line in problem.splitlines()) <= 68
+
+
+def test_a_preflight_manifest_with_a_mistake_in_it_is_invalid_and_not_foreign(
+    tmp_path: Path,
+):
+    # The line between the two reports. This file is unmistakably addressed to
+    # preflight -- it is just wrong -- so the answer names the field, and does
+    # not tell the author they were writing for some other tool.
+    manifest = _manifest()
+    del manifest["entrypoint"]
+    folder = _write_package(tmp_path, "widget", manifest=manifest)
+
+    inspection = inspect_package(folder)
+
+    assert inspection.package is None
+    assert inspection.foreign_manifest is False
+    assert "entrypoint" in (inspection.problem or "")
+
+
+def test_a_manifest_problem_is_reported_in_words_and_not_as_a_pydantic_dump(
+    tmp_path: Path,
+):
+    # str(ValidationError) is several lines per error, each with a URL and an
+    # echo of the input. Nine unknown fields is a wall nobody reads, so the
+    # list is capped and the remainder counted.
+    manifest = {**_manifest(), **{f"extra_{index}": index for index in range(9)}}
+    folder = _write_package(tmp_path, "widget", manifest=manifest)
+
+    problem = inspect_package(folder).problem or ""
+
+    assert problem.startswith("9 problems with this manifest:")
+    assert "... and 3 more" in problem
+    assert len(problem.splitlines()) == 8
+    assert "further information" not in problem
+    assert "https://" not in problem
+
+
 def test_inspecting_a_folder_of_packages_resolves_each_against_that_folder(
     tmp_path: Path,
 ):

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -58,6 +59,10 @@ class Inspection:
     entrypoint_file: Path | None = None
     #: Why the manifest or the entrypoint did not hold up, if it did not.
     problem: str | None = None
+    #: The file is a ``manifest.json``, but it belongs to some other system --
+    #: it declares not one of the fields preflight requires. This is a different
+    #: report from an invalid manifest, because nothing about it is wrong.
+    foreign_manifest: bool = False
 
     @property
     def has_manifest(self) -> bool:
@@ -80,6 +85,84 @@ class Inspection:
             return ()
         refused = frozenset(ToolRisk(risk) for risk in risks)
         return tuple(tool for tool in self.package.plugin.tools if tool.risk in refused)
+
+
+#: How many individual field errors are worth printing before the list stops
+#: being read. Past this a person is scrolling, not deciding.
+_MAX_REPORTED_ERRORS = 6
+
+#: Prose in a report is wrapped to this, and indented by two when printed. The
+#: field tables below are not wrapped -- a column that moves is worse to read
+#: than one that runs long.
+_LINE = 68
+
+
+def _required_fields() -> tuple[str, ...]:
+    """The manifest fields with no default, in declaration order.
+
+    Derived from the model rather than listed here, so it stays true if the
+    schema gains or loses one.
+    """
+    return tuple(
+        name
+        for name, field in PluginPackageManifest.model_fields.items()
+        if field.is_required()
+    )
+
+
+def _explain(exc: Exception) -> tuple[str, bool]:
+    """Why the manifest did not parse, in words, and whether it is even ours.
+
+    ``str(ValidationError)`` is a per-error dump with a documentation URL and an
+    echo of the input under every entry -- upwards of fifty lines for a file
+    whose only crime is belonging to a different tool. Plenty of systems keep a
+    ``manifest.json``, so someone pointing ``check`` at a browser extension or a
+    web app is not making a mistake, they are testing what this thing is. That
+    is the moment they decide preflight is broken, and a wall of pydantic is how
+    they decide it. Answer with the short true thing and the next command.
+
+    Returns the description, and whether the file is another system's manifest.
+    """
+    if not isinstance(exc, ValidationError):
+        return str(exc), False
+
+    errors = exc.errors()
+    required = _required_fields()
+    absent = {
+        str(error["loc"][0])
+        for error in errors
+        if error["type"] == "missing" and len(error["loc"]) == 1
+    }
+    unknown = sum(1 for error in errors if error["type"] == "extra_forbidden")
+
+    # Not one required field is present. A preflight manifest with a mistake in
+    # it still looks like a preflight manifest; this does not look like one at
+    # all, and calling it invalid would be a false claim about someone else's
+    # perfectly good file.
+    if absent >= set(required):
+        return (
+            textwrap.fill(
+                f"This is a manifest.json, but not one of preflight's. It has "
+                f"none of the fields preflight requires ({', '.join(required)}), "
+                f"and {unknown} that preflight does not recognise.",
+                width=_LINE,
+            ),
+            True,
+        )
+
+    shown = errors[:_MAX_REPORTED_ERRORS]
+    count = len(errors)
+    lines = [f"{count} problem{'' if count == 1 else 's'} with this manifest:"]
+    width = max(len(_where(error)) for error in shown)
+    lines += [f"  {_where(error):<{width}}  {error['msg']}" for error in shown]
+    if count > len(shown):
+        lines.append(f"  ... and {count - len(shown)} more")
+    return "\n".join(lines), False
+
+
+def _where(error: dict) -> str:
+    """The dotted path to the field an error is about."""
+    return ".".join(str(part) for part in error["loc"]) or "(the file itself)"
 
 
 def _resolve_on_disk(module_name: str, import_root: Path) -> tuple[Path | None, str]:
@@ -130,8 +213,12 @@ def inspect_package(folder: Path | str, *, import_root: Path | str | None = None
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         package = PluginPackageManifest.model_validate(payload)
     except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as exc:
+        problem, foreign = _explain(exc)
         return Inspection(
-            folder=package_folder, manifest_path=manifest_path, problem=str(exc)
+            folder=package_folder,
+            manifest_path=manifest_path,
+            problem=problem,
+            foreign_manifest=foreign,
         )
 
     module_name = package.entrypoint.split(":", 1)[0]
@@ -204,14 +291,34 @@ def format_inspection(
         return "\n".join(lines)
 
     if inspection.package is None:
-        lines += [
-            f"  manifest      INVALID",
-            "",
-            f"  {inspection.problem}",
-            "",
-            "  preflight refuses a manifest it cannot fully understand rather than",
-            "  ignoring the parts it does not recognise.",
-        ]
+        detail = [f"  {line}" for line in (inspection.problem or "").splitlines()]
+        if inspection.foreign_manifest:
+            lines += [
+                "  manifest      not preflight's",
+                "",
+                *detail,
+                "",
+                "  Plenty of systems keep a file by that name, and preflight cannot",
+                "  read theirs -- it would have to guess what any of it permits. A",
+                "  preflight manifest is written by whoever sets the terms for",
+                "  loading: the package's author, when your host requires one, or",
+                "  you, when you adopt something that never heard of preflight.",
+                "",
+                "  Writing yours means taking that filename:",
+                f"      preflight create {name} --force",
+                "",
+                "  That replaces the file above. Move theirs aside first if the",
+                "  tool it belongs to still needs it.",
+            ]
+        else:
+            lines += [
+                "  manifest      INVALID",
+                "",
+                *detail,
+                "",
+                "  preflight refuses a manifest it cannot fully understand rather than",
+                "  ignoring the parts it does not recognise.",
+            ]
         return "\n".join(lines)
 
     package = inspection.package
