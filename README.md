@@ -34,7 +34,15 @@ Read this before the rest, because the two halves above are easy to over-read.
 
 - **It is not a scanner.** `preflight check` never reads the package's *code*. It reads the package's *declaration about itself* and tells you whether that declaration is coherent. It cannot detect malware, and it has no opinion on whether a package does what it claims.
 - **It is not a sandbox.** Once a plugin is imported it is ordinary Python with the full run of your process. preflight decides *whether* to import and has no power after that.
-- **It only helps where there is a manifest.** Point it at a repository that has never heard of preflight and it will correctly tell you it has nothing to check. `preflight init` exists to close that gap by letting *you* write down what you will permit — but that is your judgement being recorded, not preflight's.
+- **It only works where there is a manifest.** That is not a gap waiting to be filled — it is the trade. The description has to live outside the code, so someone has to write it: the plugin author, because your application requires it, or you, with `preflight init`, when you adopt something that never heard of preflight. Either way a manifest records a judgement, and preflight enforces that judgement rather than forming one of its own.
+
+### Who this is for
+
+You are writing a program that loads plugins — yours or other people's — and you want the decision about each one made before it runs.
+
+In that position you are not hoping a manifest exists. **You require one, and that is ordinary.** Chrome extensions do not load without `manifest.json`; VS Code extensions do not load without a `contributes` block; Obsidian plugins have a `manifest.json` too. Every plugin system worth the name makes the plugin declare itself in a file the host can read first, because the alternative is asking the code, and asking the code means running it. preflight gives you that requirement, a schema for it, and a gate that enforces it — including the part almost everyone gets wrong, which is doing all of it before the import.
+
+If what you want instead is to know whether something you downloaded is safe to install, preflight is the wrong tool and no amount of it will become the right one. That needs a scanner that reads code, and this is not one.
 
 ---
 
@@ -519,6 +527,9 @@ The extraction found a hole in the original, and the history keeps it: the first
 The reason this generalises beyond one desktop app is that dynamic plugin loading is currently exploding in agent tooling — MCP servers, agent skills, tool packs — and very little of it is gated. The manifest here already speaks that vocabulary (tools, risk levels, permissions) because that is what the original application needed it to describe. To be clear about the scope of that claim: this is a plugin trust boundary that happens to suit agent tooling, not an agent framework.
 
 ## FAQ
+
+**Most things on GitHub have no manifest. What good is a loader that needs one?**
+The question assumes preflight is something you point at other people's repositories. It is something you put inside your own program. If you are the host — the one deciding what may load — then you set the price of admission, and requiring a manifest is what every plugin system already does. The plugin author writes one because that is what loading in your application costs, the same way an extension author writes one because that is what loading in a browser costs. `check` and `init` cover the other case, a package that predates your decision to gate anything, and `init` is the adoption path rather than the product: you write down what you will permit, and then your loader holds that line whether or not the package agrees.
 
 **Why not `importlib.metadata.entry_points()`?**
 It is the standard answer and it is a good one when your plugins are packages you installed on purpose. But an entry point is a name resolved by importing it — reading the metadata tells you a module path, and finding out what is there means running it. The installation itself is the trust decision. preflight is for the case where the trust decision comes later than the installation: the files are already on disk, and something still has to decide whether today's build, on today's platform, is willing to run them.
