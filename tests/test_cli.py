@@ -5,7 +5,7 @@ so two of its properties are load-bearing: it must never import the thing it is
 inspecting, and it must exit non-zero when a package would be refused, so it can
 sit in a script without anyone reading the output.
 
-``init`` writes a file into a directory the user named. It must refuse to
+``create`` writes a file into a directory the user named. It must refuse to
 overwrite one, and it must refuse to write a manifest whose entrypoint could
 never resolve.
 """
@@ -78,7 +78,7 @@ def test_check_never_imports_the_package_it_is_pointed_at(tmp_path, capsys, monk
     assert "widget" not in sys.modules
 
 
-def test_check_on_a_package_with_no_manifest_says_so_and_points_at_init(
+def test_check_on_a_package_with_no_manifest_says_so_and_points_at_create(
     tmp_path, capsys
 ):
     folder = _write_package(tmp_path, "widget")
@@ -87,7 +87,7 @@ def test_check_on_a_package_with_no_manifest_says_so_and_points_at_init(
     out = capsys.readouterr().out
     assert "no manifest.json found" in out
     assert "it is the absence of one" in out
-    assert "preflight init widget" in out
+    assert "preflight create widget" in out
 
 
 def test_check_lists_every_declared_tool_and_flags_the_ones_beyond_read(
@@ -203,10 +203,10 @@ def test_check_on_a_missing_path_exits_two(tmp_path, capsys):
     assert "not a directory" in capsys.readouterr().err
 
 
-def test_init_writes_a_manifest_that_check_then_accepts(tmp_path, capsys):
+def test_create_writes_a_manifest_that_check_then_accepts(tmp_path, capsys):
     folder = _write_package(tmp_path, "widget")
 
-    assert main(["init", str(folder)]) == 0
+    assert main(["create", str(folder)]) == 0
     written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     assert written["package_id"] == "local.widget"
     assert written["entrypoint"] == "widget.plugin:create_plugin"
@@ -216,31 +216,48 @@ def test_init_writes_a_manifest_that_check_then_accepts(tmp_path, capsys):
     assert main(["check", str(folder)]) == 0
 
 
-def test_init_says_what_the_manifest_does_and_does_not_mean(tmp_path, capsys):
+def test_create_works_from_inside_the_package_it_is_writing_for(
+    tmp_path, capsys, monkeypatch
+):
+    # `cd widget && preflight create .` is the obvious way to run this, and
+    # every name in the generated manifest comes from the folder's name --
+    # which for '.' is the empty string until the path is resolved.
+    folder = _write_package(tmp_path, "widget")
+    monkeypatch.chdir(folder)
+
+    assert main(["create", "."]) == 0
+    written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+
+    assert written["package_id"] == "local.widget"
+    assert written["plugin"]["plugin_id"] == "widget"
+    assert written["entrypoint"] == "widget.plugin:create_plugin"
+
+
+def test_create_says_what_the_manifest_does_and_does_not_mean(tmp_path, capsys):
     folder = _write_package(tmp_path, "widget")
 
-    main(["init", str(folder)])
+    main(["create", str(folder)])
     out = capsys.readouterr().out
 
     assert "what you PERMIT" in out
     assert "did not read its code" in out
 
 
-def test_init_refuses_to_overwrite_an_existing_manifest_without_force(
+def test_create_refuses_to_overwrite_an_existing_manifest_without_force(
     tmp_path, capsys
 ):
     folder = _write_package(tmp_path, "widget", manifest=_manifest())
     original = (folder / "manifest.json").read_text(encoding="utf-8")
 
-    assert main(["init", str(folder)]) == 2
+    assert main(["create", str(folder)]) == 2
     assert (folder / "manifest.json").read_text(encoding="utf-8") == original
     assert "already exists" in capsys.readouterr().err
 
-    assert main(["init", str(folder), "--force"]) == 0
+    assert main(["create", str(folder), "--force"]) == 0
     assert (folder / "manifest.json").read_text(encoding="utf-8") != original
 
 
-def test_init_refuses_a_folder_name_that_can_never_be_a_python_package(
+def test_create_refuses_a_folder_name_that_can_never_be_a_python_package(
     tmp_path, capsys
 ):
     # No manifest can make `import weather-tool` work, so writing one that
@@ -248,20 +265,20 @@ def test_init_refuses_a_folder_name_that_can_never_be_a_python_package(
     folder = tmp_path / "weather-tool"
     folder.mkdir()
 
-    assert main(["init", str(folder)]) == 2
+    assert main(["create", str(folder)]) == 2
     assert not (folder / "manifest.json").exists()
     err = capsys.readouterr().err
     assert "cannot be a Python package name" in err
     assert "weather-tool  ->  weather_tool" in err
 
 
-def test_init_accepts_an_awkward_folder_name_when_given_an_explicit_entrypoint(
+def test_create_accepts_an_awkward_folder_name_when_given_an_explicit_entrypoint(
     tmp_path, capsys
 ):
     folder = tmp_path / "weather-tool"
     folder.mkdir()
 
-    assert main(["init", str(folder), "--entrypoint", "elsewhere.plugin:build"]) == 0
+    assert main(["create", str(folder), "--entrypoint", "elsewhere.plugin:build"]) == 0
     written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     assert written["entrypoint"] == "elsewhere.plugin:build"
 

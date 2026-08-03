@@ -16,7 +16,7 @@ and never imported. Every decision is made against the plugin's manifest file,
 so the import is what a plugin gets for passing rather than the first thing that
 happens to it.
 
-There is also a command line -- ``preflight check`` and ``preflight init`` -- for
+There is also a command line -- ``preflight check`` and ``preflight create`` -- for
 the separate moment where you are adopting a package you did not write and want
 to read its paperwork, or write down what you will permit it to do. That is the
 on-ramp to the gate above, not a substitute for it.
