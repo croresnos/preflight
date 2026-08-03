@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
+
+import pytest
 
 from preflight.cli import main
 
@@ -85,6 +86,91 @@ def test_check_lists_every_declared_tool_and_flags_the_ones_beyond_read(
     assert "deletes things" in out
 
 
+def test_check_exits_non_zero_on_a_risk_the_caller_refused(tmp_path, capsys):
+    # Paperwork that is entirely in order. The only thing wrong with this
+    # package is that the caller said they would not accept it.
+    folder = _write_package(
+        tmp_path,
+        "widget",
+        manifest=_manifest(tools=[{"name": "widget.wipe", "risk": "destructive"}]),
+    )
+
+    assert main(["check", str(folder)]) == 0
+    capsys.readouterr()
+    assert main(["check", str(folder), "--refuse", "destructive"]) == 1
+
+
+def test_check_ignores_a_refused_risk_the_package_never_declared(tmp_path, capsys):
+    folder = _write_package(
+        tmp_path,
+        "widget",
+        manifest=_manifest(tools=[{"name": "widget.wipe", "risk": "destructive"}]),
+    )
+
+    assert main(["check", str(folder), "--refuse", "financial"]) == 0
+    out = capsys.readouterr().out
+    assert "a risk you refused" not in out
+    assert "! widget.wipe" in out
+
+
+def test_check_marks_the_refused_tool_and_names_the_policy_that_would_stop_it(
+    tmp_path, capsys
+):
+    # The command line informs a decision that gets enforced somewhere else.
+    # Printing the enforcing call by name is what keeps the two connected.
+    folder = _write_package(
+        tmp_path,
+        "widget",
+        manifest=_manifest(
+            tools=[
+                {"name": "widget.read", "risk": "read"},
+                {"name": "widget.wipe", "risk": "destructive"},
+            ]
+        ),
+    )
+
+    main(["check", str(folder), "--refuse", "destructive"])
+    out = capsys.readouterr().out
+
+    assert "X widget.wipe" in out
+    assert "  widget.read" in out
+    assert "1 tool declares a risk you refused: widget.wipe (destructive)" in out
+    assert "Policy(refuse_tool_risks={ToolRisk.DESTRUCTIVE})" in out
+    assert "by your rule, not by preflight's" in out
+
+
+def test_refuse_accepts_a_comma_separated_list_and_repetition_alike(tmp_path, capsys):
+    folder = _write_package(
+        tmp_path,
+        "widget",
+        manifest=_manifest(tools=[{"name": "widget.buy", "risk": "financial"}]),
+    )
+
+    assert main(["check", str(folder), "--refuse", "destructive,financial"]) == 1
+    comma = capsys.readouterr().out
+
+    assert (
+        main(["check", str(folder), "--refuse", "destructive", "--refuse", "financial"])
+        == 1
+    )
+    assert capsys.readouterr().out == comma
+
+
+def test_refuse_rejects_an_unknown_risk_name_and_lists_the_valid_ones(
+    tmp_path, capsys
+):
+    folder = _write_package(tmp_path, "widget", manifest=_manifest())
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["check", str(folder), "--refuse", "spicy"])
+
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "unknown risk 'spicy'" in err
+    assert "destructive" in err
+    assert "sensitive_disclosure" in err
+
+
 def test_check_on_a_missing_path_exits_two(tmp_path, capsys):
     assert main(["check", str(tmp_path / "nowhere")]) == 2
     assert "not a directory" in capsys.readouterr().err
@@ -153,13 +239,44 @@ def test_init_accepts_an_awkward_folder_name_when_given_an_explicit_entrypoint(
     assert written["entrypoint"] == "elsewhere.plugin:build"
 
 
-def test_demo_loads_one_plugin_and_refuses_three(capsys):
+def test_demo_loads_two_plugins_and_refuses_three(capsys):
     assert main(["demo"]) == 0
     out = capsys.readouterr().out
 
-    assert out.count("LOADED") == 1
+    assert out.count("LOADED") == 2
     assert out.count("REFUSED") == 3
-    assert "1 loaded, 3 refused" in out
+    assert "2 loaded, 3 refused" in out
     assert "2 of the 3 stopped before any of their code ran" in out
     # collider is refused from its manifest alone, so its tripwire never fires.
     assert "[collider]" not in out
+
+
+def test_demo_with_a_refused_risk_stops_the_janitor_while_it_is_still_inert(capsys):
+    # The same plugin, the same manifest, a different host policy. This is the
+    # one refusal in the demo that is nobody's fault.
+    #
+    # The tripwires are asserted in test_examples.py rather than here, because
+    # they only fire on an import, and by this point in the session the example
+    # packages are already in sys.modules. A tripwire assertion that passes for
+    # that reason would be measuring pytest, not preflight.
+    assert main(["demo", "--refuse", "destructive"]) == 0
+    out = capsys.readouterr().out
+
+    assert out.count("LOADED") == 1
+    assert out.count("REFUSED") == 4
+    assert "1 loaded, 4 refused" in out
+    assert "3 of the 4 stopped before any of their code ran" in out
+    assert "REFUSED  janitor" in out
+    assert "risk 'destructive', which this host refuses" in out
+
+
+def test_demo_refusing_destructive_does_not_catch_the_plugin_that_lied(capsys):
+    # impostor declares two read-only tools and produces a destructive third
+    # one after loading. --refuse acts on declarations, so it cannot see that.
+    # This is the honest limit of the flag and it is worth pinning.
+    assert main(["demo", "--refuse", "destructive"]) == 0
+    out = capsys.readouterr().out
+
+    assert "REFUSED impostor imported, then rejected" in " ".join(out.split())
+    assert "does not match its validated package manifest" in out
+    assert "preflight enforces declarations. It does not detect concealment." in out

@@ -1,4 +1,4 @@
-"""A host that loads four plugins. Three of them do not deserve to load.
+"""A host that loads five plugins. Three of them do not deserve to load.
 
 Run it::
 
@@ -12,6 +12,12 @@ Read the output for the lines that say ``top-level plugin code is executing``.
 Those are tripwires: the earliest statement in each plugin package, printed only
 if that plugin got as far as being imported. Two of the three refusals happen
 with the plugin still inert on disk, and their tripwires never fire.
+
+This host passes no ``Policy``, so it accepts every declared risk level. That is
+why ``janitor`` loads here despite declaring a tool that deletes things --
+nothing about it is wrong, and this host never said it minded. A host that does
+mind writes ``Policy(refuse_tool_risks={ToolRisk.DESTRUCTIVE})``, which is what
+``preflight demo --refuse destructive`` runs.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ def main() -> None:
             "example.trespasser",
             "example.collider",
             "example.impostor",
+            "example.janitor",
         ],
     )
 
@@ -57,7 +64,7 @@ def main() -> None:
     print(f"  impostor.read_profile -> {registry.tool_owner('impostor.read_profile')}")
 
     greeter = result.plugins["greeter"]
-    print(f"\ncalling the one plugin that loaded\n  {greeter.hello('world')}")
+    print(f"\ncalling a plugin that loaded\n  {greeter.hello('world')}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "package_id": "example.janitor",
+  "core_api_version": "1.0",
+  "visibility": "public",
+  "release_ring": "stable",
+  "entrypoint": "janitor.plugin:create_plugin",
+  "plugin": {
+    "schema_version": "1.0",
+    "plugin_id": "janitor",
+    "name": "Janitor",
+    "module_version": "1.0.0",
+    "tools": [
+      {
+        "name": "janitor.purge_cache",
+        "risk": "destructive",
+        "surface": "backend",
+        "description": "Delete cached files older than thirty days."
+      }
+    ]
+  }
+}
