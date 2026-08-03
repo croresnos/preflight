@@ -17,9 +17,23 @@ import sys
 
 import pytest
 
-from preflight.cli import main
+from preflight.cli import _example_plugins, main
 
 from test_inspect import _manifest, _write_package  # noqa: E402
+
+
+def test_the_demo_examples_are_found_without_reference_to_the_working_directory():
+    """`preflight demo` has to work from anywhere, so this must not read the cwd.
+
+    The path is derived from the module's own location, which is true of a
+    source checkout and of a wheel alike. The wheel case cannot be proven from
+    inside this test run -- see tests/test_packaging.py, which builds one.
+    """
+    found = _example_plugins()
+
+    assert found is not None
+    assert found.is_dir()
+    assert (found / "janitor" / "manifest.json").is_file()
 
 
 def test_check_exits_zero_on_a_package_whose_paperwork_holds_up(tmp_path, capsys):
