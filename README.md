@@ -685,6 +685,7 @@ python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
 That puts a `preflight` command on your PATH, and it works from any directory — the commands take the path you give them and never read the working directory. `python -m preflight` does the same thing if you would rather not depend on the script.
 
 ```
+preflight --version
 preflight demo
 preflight check ./some-plugin
 ```

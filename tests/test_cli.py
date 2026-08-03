@@ -17,9 +17,22 @@ import sys
 
 import pytest
 
+from preflight import __version__
 from preflight.cli import _example_plugins, main
 
 from test_inspect import _manifest, _write_package  # noqa: E402
+
+
+def test_version_reports_the_installed_version_without_a_subcommand(capsys):
+    # Two claims in one run. `command` is a required subparser, so --version has
+    # to be answered before that requirement is enforced or it is unreachable on
+    # its own -- passing no subcommand here is the point. And it exits 0, which
+    # matters: `preflight --version` in a CI step should not read as a failure.
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--version"])
+
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"preflight {__version__}"
 
 
 def test_the_demo_examples_are_found_without_reference_to_the_working_directory():
