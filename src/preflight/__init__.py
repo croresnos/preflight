@@ -1,19 +1,25 @@
 """preflight -- decide whether a plugin may load, before any of its code runs.
 
-Two ways in. The command line, for something you downloaded and have not read::
+This goes inside your program and runs every time it starts, deciding which
+plugins are allowed to load::
 
-    preflight check ./some-plugin      # reads its paperwork. Executes nothing.
+    from preflight import Policy, ToolRisk, load_plugins
 
-And the library, for your own application at runtime::
+    result = load_plugins(
+        "plugins",
+        allow=["acme.weather"],          # required, and there is no wildcard
+        policy=Policy(refuse_tool_risks={ToolRisk.DESTRUCTIVE}),
+    )
 
-    from preflight import load_plugins
+Packages in the directory but missing from ``allow`` are discovered, reported,
+and never imported. Every decision is made against the plugin's manifest file,
+so the import is what a plugin gets for passing rather than the first thing that
+happens to it.
 
-    result = load_plugins("plugins", allow=["example.greeter"])
-    print(result)
-    greeter = result.plugins["greeter"]
-
-Every decision is made against the plugin's manifest file. The import is what a
-plugin gets for passing, not the first thing that happens to it.
+There is also a command line -- ``preflight check`` and ``preflight init`` -- for
+the separate moment where you are adopting a package you did not write and want
+to read its paperwork, or write down what you will permit it to do. That is the
+on-ramp to the gate above, not a substitute for it.
 
 This is not a sandbox and not a scanner. Once a plugin is imported it is
 ordinary Python with the full run of the process, and preflight has no power
