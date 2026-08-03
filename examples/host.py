@@ -4,6 +4,10 @@ Run it::
 
     python examples/host.py
 
+or, once preflight is installed::
+
+    preflight demo
+
 Read the output for the lines that say ``top-level plugin code is executing``.
 Those are tripwires: the earliest statement in each plugin package, printed only
 if that plugin got as far as being imported. Two of the three refusals happen
@@ -26,51 +30,33 @@ sys.path.insert(0, str(EXAMPLES.parent / "src"))
 # of a security check is worse than one that documents the requirement.
 sys.path.insert(0, str(PLUGINS))
 
-from preflight import PluginRejected, public_build  # noqa: E402
-
-
-def attempt(registry, package_directory: str) -> None:
-    print(f"\n{package_directory}")
-    try:
-        registered = registry.load_manifest_file(
-            PLUGINS / package_directory / "manifest.json",
-            trusted_root=PLUGINS,
-        )
-    except PluginRejected as refusal:
-        print(f"  REFUSED  {refusal}")
-        return
-    print(f"  LOADED   {registered.package.plugin.name}")
+from preflight import load_plugins  # noqa: E402
 
 
 def main() -> None:
-    registry = public_build(
-        allowed_package_ids={
+    # Every package below is on the allowlist, is marked public, and is in the
+    # stable ring, so each refusal is about the plugin itself rather than about
+    # this host's tier policy. Order matters: the first plugin to claim a tool
+    # name keeps it, and this list is where that precedence is decided.
+    result = load_plugins(
+        PLUGINS,
+        allow=[
             "example.greeter",
             "example.trespasser",
             "example.collider",
             "example.impostor",
-        }
+        ],
     )
 
-    # Every one of these is on the allowlist, is marked public, and is in the
-    # stable ring, so each refusal below is about the plugin itself rather than
-    # about this build's tier policy.
-    attempt(registry, "greeter")
-    attempt(registry, "trespasser")
-    attempt(registry, "collider")
-    attempt(registry, "impostor")
-
-    print("\nregistered plugins")
-    for manifest in registry.available():
-        print(f"  {manifest.plugin_id}  {manifest.name} {manifest.module_version}")
-        for tool in manifest.tools:
-            print(f"    tool {tool.name} (risk: {tool.risk.value})")
+    print()
+    print(result)
 
     print("\ntool ownership is exclusive")
+    registry = result.registry
     print(f"  greeter.hello -> {registry.tool_owner('greeter.hello')}")
     print(f"  impostor.read_profile -> {registry.tool_owner('impostor.read_profile')}")
 
-    greeter = registry.get("greeter")
+    greeter = result.plugins["greeter"]
     print(f"\ncalling the one plugin that loaded\n  {greeter.hello('world')}")
 
 
