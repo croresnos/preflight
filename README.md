@@ -680,7 +680,22 @@ Because settings are host code, and host code is the one thing on this boundary 
 python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
 ```
 
-**Python 3.11+.** One runtime dependency: `pydantic>=2`. Installing puts a `preflight` command on your PATH; `python -m preflight` works too.
+**Python 3.11+.** One runtime dependency: `pydantic>=2`.
+
+That puts a `preflight` command on your PATH, and it works from any directory — the commands take the path you give them and never read the working directory. `python -m preflight` does the same thing if you would rather not depend on the script.
+
+```
+preflight demo
+preflight check ./some-plugin
+```
+
+Installing into a virtualenv puts the command on that environment's PATH, which means it is there when the environment is active and gone when it is not. If you want `preflight` available everywhere regardless, install it standalone:
+
+```
+pipx install "preflight @ git+https://github.com/croresnos/preflight"
+```
+
+The examples ship inside the distribution, so `preflight demo` runs from an installed copy with no clone. That is deliberate — the demo is the shortest path to understanding what gets refused and why, and it is worth nothing if reaching it requires checking out a repository first.
 
 Run the tests from a clean clone with nothing installed but pytest:
 

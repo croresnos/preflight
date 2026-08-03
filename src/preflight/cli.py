@@ -171,13 +171,29 @@ def _init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _example_plugins() -> Path | None:
+    """The bundled example packages, wherever this copy of preflight was installed from.
+
+    A wheel carries them at ``preflight/_examples``; a source checkout keeps
+    them at the repository root, which is also where an editable install finds
+    them. Neither location depends on the working directory, so ``demo`` runs
+    the same from anywhere.
+    """
+    here = Path(__file__).resolve().parent
+    candidates = (
+        here / "_examples" / "plugins",
+        here.parent.parent / "examples" / "plugins",
+    )
+    return next((path for path in candidates if path.is_dir()), None)
+
+
 def _demo(args: argparse.Namespace) -> int:
     """Run the five bundled example plugins. Three of them deserve refusing."""
-    examples = Path(__file__).resolve().parent.parent.parent / "examples" / "plugins"
-    if not examples.is_dir():
+    examples = _example_plugins()
+    if examples is None:
         print(
-            "preflight: the demo ships with the source. Clone the repository and\n"
-            "run `preflight demo` from inside it.",
+            "preflight: this build carries no example packages. Clone the\n"
+            "repository and run `preflight demo` from inside it.",
             file=sys.stderr,
         )
         return 2

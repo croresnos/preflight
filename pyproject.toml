@@ -31,6 +31,13 @@ preflight = "preflight.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/preflight"]
 
+# The demo is the fastest way to understand what preflight refuses and why, so a
+# plain `pip install` has to be able to run it. Without this the examples live
+# only in a source checkout and `preflight demo` tells everyone to go clone the
+# repository -- which is the one instruction that loses the reader.
+[tool.hatch.build.targets.wheel.force-include]
+"examples/plugins" = "preflight/_examples/plugins"
+
 [tool.pytest.ini_options]
 # Keeps a fresh clone honest: `pytest` works with no editable install.
 pythonpath = ["src"]
