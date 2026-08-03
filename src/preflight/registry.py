@@ -107,7 +107,9 @@ def _import_chain(module_name: str) -> tuple[str, ...]:
 def _module_file(module_name: str) -> Path | None:
     """Locate a module's file on disk without executing the module.
 
-    ``find_spec`` consults the import machinery but does not run the target.
+    ``find_spec`` consults the import machinery but does not run the target. It
+    does run the target's *parent* when the name is dotted, which is why the
+    caller announces the plugin as running before it gets here.
     Returns ``None`` when there is no file to point at: built-in modules report
     ``origin == "built-in"``, frozen modules ``"frozen"``, and namespace packages
     report ``None``. A loader that trusts exactly one directory has no business
@@ -147,14 +149,34 @@ def _import_entrypoint(
     import path is the host's job, and doing it here would mean mutating global
     import state as a side effect of a security check.
 
-    ``about_to_import`` is called immediately before the import and never
-    influences it. It exists so a caller can report *"this plugin's code ran"*
-    honestly rather than inferring it from which error message came back.
+    ``about_to_import`` is called immediately before the plugin's code can run
+    and never influences it. It exists so a caller can report *"this plugin's
+    code ran"* honestly rather than inferring it from which error message came
+    back. Note that for a dotted entrypoint that moment arrives during
+    resolution, not at the import below -- see the loop.
     """
     module_name, attribute = entrypoint.split(":", 1)
     root = Path(trusted_root).resolve()
+    announced = False
+
+    def announce() -> None:
+        """Report that the plugin's code is about to run, once, before it does."""
+        nonlocal announced
+        if about_to_import is not None and not announced:
+            about_to_import()
+        announced = True
 
     for ancestor in _import_chain(module_name):
+        # `find_spec` on a dotted name imports the parent package to reach its
+        # __path__. So for any entrypoint but a top-level one, the plugin's own
+        # code runs *here*, during resolution, and not at the import below. The
+        # parent has already cleared the boundary by this point -- the chain is
+        # outermost first -- so this is a reporting line and not a security one.
+        # Without it, a package whose __init__ runs and then raises is reported
+        # as `never imported`, which is the one thing this library cannot get
+        # wrong: the whole report is a claim about what did and did not execute.
+        if "." in ancestor:
+            announce()
         located = _module_file(ancestor)
         if located is None:
             raise PluginRejected(
@@ -168,9 +190,10 @@ def _import_entrypoint(
             )
 
     # Past this line the plugin's own code is about to run. Everything above was
-    # decided with the module still inert on disk.
-    if about_to_import is not None:
-        about_to_import()
+    # decided with the module still inert on disk -- unless the entrypoint was
+    # dotted, in which case `announce` already fired during resolution and this
+    # call is the no-op that says so.
+    announce()
     module = importlib.import_module(module_name)
 
     # Defence in depth: re-check what actually loaded. Resolution and import are

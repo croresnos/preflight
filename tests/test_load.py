@@ -173,6 +173,70 @@ def test_code_ran_separates_a_refusal_before_the_import_from_one_after(
     assert "outsider" not in _tripwires(tmp_path)
 
 
+def test_a_package_that_ran_and_then_failed_is_not_reported_as_inert(
+    tmp_path, monkeypatch
+):
+    """The one claim this library cannot get wrong. Found by hand-testing 0.3.0.
+
+    ``find_spec`` on a dotted name imports the parent package to reach its
+    ``__path__``, so a dotted entrypoint runs the package's ``__init__`` during
+    *resolution* -- before the ``import_module`` call that used to be the only
+    thing announcing a plugin as running. A package whose top-level code ran,
+    wrote to disk, and then raised was reported as ``never imported`` and
+    counted among those "stopped before any of their code ran".
+
+    The tripwire is the proof it had already run. Nothing about the trusted-root
+    boundary was ever wrong here -- the parent clears it before being resolved
+    -- but a loader whose entire report is a claim about what executed does not
+    get to be approximately right about that.
+    """
+    _write_plugin(tmp_path, "grenade", package_id="example.grenade")
+    tmp_path.joinpath("grenade", "__init__.py").write_text(
+        f"from pathlib import Path\n"
+        f"_log = Path({str(tmp_path / TRIPWIRE)!r})\n"
+        f"_log.write_text((_log.read_text() if _log.exists() else '') + 'grenade\\n')\n"
+        f"raise RuntimeError('detonated at import time')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = load_plugins(tmp_path, allow=["example.grenade"])
+
+    assert _tripwires(tmp_path) == {"grenade"}
+    outcome = result.outcomes[0]
+    assert outcome.loaded is False
+    assert outcome.code_ran is True
+    assert outcome.stage == "imported, then rejected"
+    assert "detonated at import time" in (outcome.reason or "")
+    assert "0 of the 1 stopped before any of their code ran" in str(result)
+
+
+def test_a_top_level_entrypoint_is_still_announced_only_at_the_import(
+    tmp_path, monkeypatch
+):
+    # The other side of the fix, so it cannot be "announce early, always". An
+    # undotted entrypoint has no parent for `find_spec` to import, so nothing
+    # can run before the boundary check turns it away -- and `never imported`
+    # has to stay true for it. `json` is the case that matters: a real module,
+    # resolvable, and outside the trusted root.
+    _write_plugin(tmp_path, "solo", package_id="example.solo")
+    manifest = tmp_path / "solo" / "manifest.json"
+    manifest.write_text(
+        manifest.read_text().replace("solo.plugin:create_plugin", "json:loads"),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = load_plugins(tmp_path, allow=["example.solo"])
+
+    outcome = result.outcomes[0]
+    assert outcome.loaded is False
+    assert outcome.code_ran is False
+    assert outcome.stage == "never imported"
+    assert "outside the trusted plugin root" in (outcome.reason or "")
+    assert _tripwires(tmp_path) == set()
+
+
 def test_a_refused_tool_risk_stops_the_plugin_before_it_is_imported(
     tmp_path, monkeypatch
 ):

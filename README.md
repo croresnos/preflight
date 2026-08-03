@@ -232,7 +232,7 @@ The middle column of a refusal is the part worth your attention:
 
 **`never imported`** means the plugin was refused while still inert on disk. Nothing of it ran. That is what preflight is for.
 
-**`imported, then rejected`** means the check could only be made against a live object, so the plugin's import-time code executed before it was turned away. Refusing it kept it out of the registry; it did not keep it from running. Both outcomes appear in normal output because the difference between them is the honest measure of what preflight did for you — and `Outcome.code_ran` is recorded from the import itself, not guessed from which error came back.
+**`imported, then rejected`** means the plugin's own code executed before it was turned away. Usually that is because the check could only be made against a live object; it can also be a package whose `__init__` ran and then raised, which happens during resolution of a dotted entrypoint (see [row 13a](#what-it-checks-in-order--and-the-test-for-each)). Refusing it kept it out of the registry; it did not keep it from running. Both outcomes appear in normal output because the difference between them is the honest measure of what preflight did for you — and `Outcome.code_ran` is recorded from the run itself, not guessed from which error came back.
 
 ### Settings
 
@@ -552,8 +552,9 @@ Every row names the test that proves it. If you doubt a row, run that test; if a
 | 11 | No tool name already owned by a loaded plugin | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
 | 12 | The entrypoint module — **and every parent package on the way to it** — resolves to a file inside `trusted_root`, located without being executed | `test_an_entrypoint_outside_the_trusted_root_never_executes`, `test_a_dotted_entrypoint_cannot_execute_an_out_of_tree_parent_package` |
 | 13 | A module with no file on disk (built-in, frozen, namespace package) is refused rather than trusted | `test_an_entrypoint_naming_a_builtin_module_is_refused`, `test_an_entrypoint_naming_a_standard_library_module_is_refused` |
+| 13a | Resolving a *dotted* entrypoint imports its parent package — `find_spec("a.b")` runs `a` — so the parent clears the boundary before it is resolved, and a package whose `__init__` runs and then fails is reported as having run | `test_a_dotted_entrypoint_cannot_execute_an_out_of_tree_parent_package`, `test_a_package_that_ran_and_then_failed_is_not_reported_as_inert`, `test_a_top_level_entrypoint_is_still_announced_only_at_the_import` |
 | 14 | The confinement check is *what* stops the import — not something else that would have refused anyway | `test_the_confinement_check_is_what_stops_the_out_of_tree_import` |
-| — | **Everything above this line happens with the plugin still inert on disk.** | |
+| — | **Everything above this line is decided from files on disk**, and no file executes before it has cleared the boundary. The one thing that does execute up here is a dotted entrypoint's parent package, at row 13a — and when it does, `code_ran` says so. | |
 | 15 | After importing, the module's real `__file__` is re-checked against `trusted_root` | `test_a_module_whose_file_changes_after_resolution_is_still_refused` |
 | 16 | The loaded object actually satisfies the `Plugin` protocol | `test_an_entrypoint_returning_something_other_than_a_plugin_is_refused` |
 | 17 | The manifest the object reports equals the manifest its file declared | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
