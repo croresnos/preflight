@@ -168,6 +168,45 @@ def test_inspecting_a_folder_of_packages_resolves_each_against_that_folder(
     assert not (tmp_path / TRIPWIRE).exists()
 
 
+def test_refused_tools_reports_only_what_the_manifest_declared(tmp_path: Path):
+    # The same question PluginRegistry answers from refuse_tool_risks, asked of
+    # a package that is not being loaded. It reads declarations and nothing
+    # else, so a tool the package never wrote down is invisible to it -- which
+    # is exactly as much as the gate itself can see.
+    folder = _write_package(
+        tmp_path,
+        "widget",
+        manifest=_manifest(
+            tools=[
+                {"name": "widget.read", "risk": "read"},
+                {"name": "widget.wipe", "risk": "destructive"},
+                {"name": "widget.buy", "risk": "financial"},
+            ]
+        ),
+    )
+
+    inspection = inspect_package(folder)
+
+    assert [tool.name for tool in inspection.refused_tools(["destructive"])] == [
+        "widget.wipe"
+    ]
+    assert [
+        tool.name for tool in inspection.refused_tools(["destructive", "financial"])
+    ] == ["widget.wipe", "widget.buy"]
+    assert inspection.refused_tools([]) == ()
+    assert inspection.refused_tools(["credential"]) == ()
+
+
+def test_refused_tools_on_a_package_with_no_readable_manifest_is_empty(
+    tmp_path: Path,
+):
+    # No declaration is not a clean bill of health. It is the absence of one,
+    # and this returns nothing rather than implying either.
+    folder = _write_package(tmp_path, "widget")
+
+    assert inspect_package(folder).refused_tools(["destructive"]) == ()
+
+
 def test_inspecting_a_folder_with_nothing_in_it_still_returns_a_result(
     tmp_path: Path,
 ):
