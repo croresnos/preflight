@@ -10,6 +10,10 @@ preflight moves every decision in front of the import. It reads a JSON manifest,
 python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
 ```
 
+This file explains what preflight is and specifies what it checks. If you would
+rather start typing, **[the manual](docs/MANUAL.md)** walks from an empty directory
+to a working gate, and has an entry for every message preflight can print at you.
+
 ## What it actually is
 
 **preflight is code that lives inside your program and runs every time your program starts, deciding which plugins are allowed to load before any of their code executes.**
@@ -215,6 +219,8 @@ Three things that are load-bearing and easy to miss:
 - **`allow` is required and has no wildcard.** A package sitting in the folder but absent from `allow` is discovered, reported, and never imported. Discovery saves you the `for` loop; it is the allowlist, not the absence of a scan, that keeps an unexpected folder from loading.
 - **The order of `allow` is the order things load,** and the first plugin to claim a tool name keeps it. That makes precedence something you wrote down rather than something the filesystem decided alphabetically.
 - **The directory you pass is the security boundary.** Every manifest must be inside it and every entrypoint must resolve to a file inside it. If you point it at a directory anyone can write to, none of the rest of this matters.
+
+If that did not run, or ran and refused something you expected to load, [the manual](docs/MANUAL.md#7-every-message-and-what-to-do-about-it) has an entry for every message preflight can print.
 
 ### Reading the report
 
