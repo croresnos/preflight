@@ -26,6 +26,7 @@ import re
 import sys
 from pathlib import Path
 
+from preflight import __version__
 from preflight.inspect import MANIFEST_NAME, format_inspection, inspect_directory
 from preflight.manifest import ToolRisk
 
@@ -260,6 +261,12 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "Packages in that folder but missing from allow are never imported."
         ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"preflight {__version__}",
+        help="print the installed version and exit",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
