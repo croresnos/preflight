@@ -42,8 +42,11 @@ def test_the_example_host_loads_one_plugin_and_refuses_three():
     assert "does not match its validated package manifest" in output
 
     # Exactly one plugin registered, and it is callable.
-    assert "LOADED   Greeter" in output
+    assert "LOADED   greeter" in output
+    assert "Greeter 1.0.0 - 1 tool" in output
     assert output.count("LOADED") == 1
+    assert "1 loaded, 3 refused" in output
+    assert "2 of the 3 stopped before any of their code ran" in output
     assert "greeter.hello -> greeter" in output
     assert "impostor.read_profile -> None" in output
     assert "Hello, world." in output

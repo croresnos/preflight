@@ -31,6 +31,7 @@ from preflight.manifest import (
     PluginPackageManifest,
     ReleaseRing,
     Tool,
+    ToolRisk,
     Visibility,
 )
 
@@ -123,7 +124,12 @@ def _module_file(module_name: str) -> Path | None:
     return path.resolve() if path.is_file() else None
 
 
-def _import_entrypoint(entrypoint: str, trusted_root: Path | str) -> object:
+def _import_entrypoint(
+    entrypoint: str,
+    trusted_root: Path | str,
+    *,
+    about_to_import: Callable[[], None] | None = None,
+) -> object:
     """Import an entrypoint only if its module lives inside ``trusted_root``.
 
     The manifest *file* is confined to the trusted root by the caller. The
@@ -140,6 +146,10 @@ def _import_entrypoint(entrypoint: str, trusted_root: Path | str) -> object:
     preflight never modifies ``sys.path``. Putting the plugin directory on the
     import path is the host's job, and doing it here would mean mutating global
     import state as a side effect of a security check.
+
+    ``about_to_import`` is called immediately before the import and never
+    influences it. It exists so a caller can report *"this plugin's code ran"*
+    honestly rather than inferring it from which error message came back.
     """
     module_name, attribute = entrypoint.split(":", 1)
     root = Path(trusted_root).resolve()
@@ -157,6 +167,10 @@ def _import_entrypoint(entrypoint: str, trusted_root: Path | str) -> object:
                 f"outside the trusted plugin root '{root}'"
             )
 
+    # Past this line the plugin's own code is about to run. Everything above was
+    # decided with the module still inert on disk.
+    if about_to_import is not None:
+        about_to_import()
     module = importlib.import_module(module_name)
 
     # Defence in depth: re-check what actually loaded. Resolution and import are
@@ -183,10 +197,16 @@ class PluginRegistry:
         edition: Edition,
         allowed_package_ids: Iterable[str],
         platform: Platform | str | None = None,
+        refuse_tool_risks: Iterable[ToolRisk | str] = (),
+        max_manifest_bytes: int | None = None,
     ) -> None:
         self.edition = Edition(edition)
         self.platform = Platform(platform) if platform is not None else _host_platform()
         self.allowed_package_ids = frozenset(allowed_package_ids)
+        self.refuse_tool_risks = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
+        self.max_manifest_bytes = (
+            self.MAX_MANIFEST_BYTES if max_manifest_bytes is None else max_manifest_bytes
+        )
         self._by_plugin: dict[str, RegisteredPlugin] = {}
         self._tool_owners: dict[str, str] = {}
         self._tools: dict[str, Tool] = {}
@@ -311,9 +331,9 @@ class PluginRegistry:
             size = path.stat().st_size
         except OSError as exc:
             raise PluginRejected(f"cannot read plugin manifest '{path}': {exc}") from exc
-        if size > self.MAX_MANIFEST_BYTES:
+        if size > self.max_manifest_bytes:
             raise PluginRejected(
-                f"plugin manifest '{path}' exceeds {self.MAX_MANIFEST_BYTES} bytes"
+                f"plugin manifest '{path}' exceeds {self.max_manifest_bytes} bytes"
             )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -340,6 +360,15 @@ class PluginRegistry:
                 f"package '{package.package_id}' does not support platform "
                 f"'{self.platform.value}'"
             )
+
+        # A declared risk the host has said it will not accept. This is the one
+        # place preflight acts on ToolRisk, and only because a host asked it to.
+        for tool in package.plugin.tools:
+            if tool.risk in self.refuse_tool_risks:
+                raise PluginRejected(
+                    f"package '{package.package_id}' declares tool '{tool.name}' with "
+                    f"risk '{tool.risk.value}', which this host refuses"
+                )
 
         policy = _EDITION_POLICY[self.edition]
         if package.visibility not in policy.visibilities:
