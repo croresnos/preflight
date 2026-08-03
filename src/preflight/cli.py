@@ -11,6 +11,11 @@ It is safe to point at untrusted code because it never imports it -- see
 :mod:`preflight.inspect`. It is *not* a malware scanner, does not read the
 package's code, and cannot tell you whether a package does what it says. It
 tells you what the package **claims**, and whether those claims are coherent.
+
+``--refuse`` on ``check`` and ``demo`` is not a fourth thing preflight knows how
+to do. It is ``Policy(refuse_tool_risks=...)`` -- the gate that runs inside a
+host at every startup -- asked at a terminal, so the exit code answers to the
+host's rules rather than to preflight's defaults.
 """
 
 from __future__ import annotations
@@ -22,8 +27,51 @@ import sys
 from pathlib import Path
 
 from preflight.inspect import MANIFEST_NAME, format_inspection, inspect_directory
+from preflight.manifest import ToolRisk
 
 _NOT_IDENTIFIER = re.compile(r"[^0-9a-zA-Z_]+")
+
+
+def _tool_risks(value: str) -> frozenset[ToolRisk]:
+    """Parse one ``--refuse`` value: a comma-separated list of risk names.
+
+    Raising ``ArgumentTypeError`` hands the failure to argparse, which reports
+    it and exits ``2`` -- the same code the rest of this module uses for "you
+    pointed me at something I cannot work with".
+    """
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    if not names:
+        raise argparse.ArgumentTypeError("expected at least one risk name")
+    risks = set()
+    for name in names:
+        try:
+            risks.add(ToolRisk(name.lower()))
+        except ValueError:
+            valid = ", ".join(risk.value for risk in ToolRisk)
+            raise argparse.ArgumentTypeError(
+                f"unknown risk '{name}'. Valid risks: {valid}"
+            ) from None
+    return frozenset(risks)
+
+
+def _refused_risks(args: argparse.Namespace) -> frozenset[ToolRisk]:
+    """Every risk named across all occurrences of ``--refuse``."""
+    return frozenset().union(*(getattr(args, "refuse", None) or [frozenset()]))
+
+
+def _add_refuse_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--refuse",
+        metavar="RISK[,RISK...]",
+        type=_tool_risks,
+        action="append",
+        help=(
+            "declared tool risks you will not accept. Repeatable. This is your "
+            "rule, not preflight's -- the same one a host writes as "
+            "Policy(refuse_tool_risks=...). Valid: "
+            + ", ".join(risk.value for risk in ToolRisk)
+        ),
+    )
 
 
 def _slug(name: str) -> str:
@@ -48,12 +96,20 @@ def _check(args: argparse.Namespace) -> int:
         print(f"preflight: '{target}' is not a directory", file=sys.stderr)
         return 2
 
+    refuse = _refused_risks(args)
     inspections = inspect_directory(target)
     for index, inspection in enumerate(inspections):
         if index:
             print()
-        print(format_inspection(inspection))
-    return 0 if all(item.consistent for item in inspections) else 1
+        print(format_inspection(inspection, refuse_tool_risks=refuse))
+
+    # Both conditions mean the same thing -- this would not load -- so both are
+    # exit 1. Incoherent paperwork and a risk the caller refused are different
+    # reasons for one answer, and a script acting on the answer needs one code.
+    would_load = all(
+        item.consistent and not item.refused_tools(refuse) for item in inspections
+    )
+    return 0 if would_load else 1
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -115,8 +171,8 @@ def _init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _demo(_args: argparse.Namespace) -> int:
-    """Run the four bundled example plugins. Three of them deserve refusing."""
+def _demo(args: argparse.Namespace) -> int:
+    """Run the five bundled example plugins. Three of them deserve refusing."""
     examples = Path(__file__).resolve().parent.parent.parent / "examples" / "plugins"
     if not examples.is_dir():
         print(
@@ -126,8 +182,9 @@ def _demo(_args: argparse.Namespace) -> int:
         )
         return 2
 
-    from preflight.load import load_plugins
+    from preflight.load import Policy, load_plugins
 
+    refuse = _refused_risks(args)
     sys.path.insert(0, str(examples))
     result = load_plugins(
         examples,
@@ -136,14 +193,34 @@ def _demo(_args: argparse.Namespace) -> int:
             "example.trespasser",
             "example.collider",
             "example.impostor",
+            "example.janitor",
         ],
+        policy=Policy(refuse_tool_risks=refuse),
     )
     print()
     print(result)
     print()
-    print("  The two lines above reading `top-level plugin code is executing` are")
-    print("  tripwires: the first statement in a plugin package. Two of the three")
-    print("  refused plugins never printed one, because they never got an import.")
+
+    ran = sum(1 for outcome in result.outcomes if outcome.code_ran)
+    refused = result.refused
+    inert = sum(1 for outcome in refused if not outcome.code_ran)
+    print(f"  The {ran} lines above reading `top-level plugin code is executing` are")
+    print(
+        f"  tripwires: the first statement in a plugin package. "
+        f"{inert} of the {len(refused)} refused"
+    )
+    print("  plugins never printed one, because they never got an import.")
+
+    if ToolRisk.DESTRUCTIVE in refuse:
+        print()
+        print("  Two of those refusals are worth comparing. janitor declared its")
+        print("  destructive tool in its manifest, so --refuse stopped it while it")
+        print("  was still inert on disk. impostor declares two read-only tools and")
+        print("  produces a destructive third one only once loaded, where no")
+        print("  declaration-based gate can see it -- it was caught afterwards, by")
+        print("  comparing what it reported against what it had declared.")
+        print()
+        print("  preflight enforces declarations. It does not detect concealment.")
     return 0
 
 
@@ -177,10 +254,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Reads the manifest, resolves the entrypoint against the filesystem, "
             "and lists every tool the package claims. Nothing is imported, so this "
             "is safe to run on code you have not read. It cannot tell you whether "
-            "the package does what it says."
+            "the package does what it says. With --refuse it exits non-zero on a "
+            "package your host would turn away, which suits a pre-commit hook."
         ),
     )
     check.add_argument("path", help="a plugin package, or a folder of them")
+    _add_refuse_flag(check)
     check.set_defaults(handler=_check)
 
     init = commands.add_parser(
@@ -198,8 +277,16 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(handler=_init)
 
     demo = commands.add_parser(
-        "demo", help="load four example plugins; three of them get refused"
+        "demo",
+        help="load five example plugins; three of them get refused",
+        description=(
+            "Loads the bundled examples through the real gate. Pass "
+            "--refuse destructive to watch a fourth one get refused for a tool "
+            "it declared honestly -- and to see the one that lied slip past the "
+            "flag entirely, because it never declared anything."
+        ),
     )
+    _add_refuse_flag(demo)
     demo.set_defaults(handler=_demo)
     return parser
 
