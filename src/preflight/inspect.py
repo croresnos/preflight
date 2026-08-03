@@ -25,10 +25,11 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from pydantic import ValidationError
 
-from preflight.manifest import PluginPackageManifest, ToolRisk
+from preflight.manifest import PluginPackageManifest, Tool, ToolRisk
 
 MANIFEST_NAME = "manifest.json"
 
@@ -66,6 +67,19 @@ class Inspection:
     def consistent(self) -> bool:
         """The manifest parsed and its entrypoint points inside the folder."""
         return self.package is not None and self.entrypoint_file is not None
+
+    def refused_tools(self, risks: Iterable[ToolRisk | str]) -> tuple[Tool, ...]:
+        """The declared tools carrying a risk in ``risks``.
+
+        This is the same decision :class:`~preflight.registry.PluginRegistry`
+        makes from ``refuse_tool_risks``, asked of a package that is not being
+        loaded. It reads the parsed manifest and nothing else -- a tool the
+        package never declared is invisible to it, exactly as it is to the gate.
+        """
+        if self.package is None:
+            return ()
+        refused = frozenset(ToolRisk(risk) for risk in risks)
+        return tuple(tool for tool in self.package.plugin.tools if tool.risk in refused)
 
 
 def _resolve_on_disk(module_name: str, import_root: Path) -> tuple[Path | None, str]:
@@ -148,8 +162,30 @@ def inspect_directory(directory: Path | str) -> tuple[Inspection, ...]:
     return found or (Inspection(folder=target),)
 
 
-def format_inspection(inspection: Inspection) -> str:
-    """The inspection, written for a person deciding whether to install this."""
+def _as_policy_call(risks: Iterable[ToolRisk]) -> str:
+    """Render a refused-risk set as the ``Policy`` a host would actually write.
+
+    The command line exists to inform a decision that gets enforced somewhere
+    else. Printing the enforcing call by name is the shortest way to say so.
+    """
+    members = ", ".join(f"ToolRisk.{risk.name}" for risk in sorted(risks, key=lambda r: r.name))
+    return f"Policy(refuse_tool_risks={{{members}}})"
+
+
+def format_inspection(
+    inspection: Inspection,
+    *,
+    refuse_tool_risks: Iterable[ToolRisk | str] = (),
+) -> str:
+    """The inspection, written for a person deciding whether to install this.
+
+    ``refuse_tool_risks`` are the risks the reader has said they will not accept.
+    Tools declaring one are marked and named, and the verdict at the bottom says
+    the package would be refused -- by that rule, not by preflight's.
+    """
+    refused = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
+    refused_tools = inspection.refused_tools(refused)
+    refused_names = {tool.name for tool in refused_tools}
     name = inspection.folder.name
     # ASCII only -- see the note in preflight.load.LoadReport.text.
     lines = [f"preflight check | {name}{os.sep} | nothing was executed", ""]
@@ -210,19 +246,40 @@ def format_inspection(inspection: Inspection) -> str:
         for tool in plugin.tools:
             meaning = _RISK_MEANING.get(tool.risk, "")
             # Anything beyond a read is worth a reader's eye before installing.
-            flag = "  " if tool.risk is ToolRisk.READ else "! "
+            # A risk the reader has already excluded gets a stronger mark: this
+            # one is not a prompt to think, it is a decision already made.
+            if tool.name in refused_names:
+                flag = "X "
+            else:
+                flag = "  " if tool.risk is ToolRisk.READ else "! "
             lines.append(
                 f"    {flag}{tool.name:<{width}}  {tool.risk.value:<{risk_width}}  {meaning}"
             )
     else:
         lines.append("  declares no tools")
 
+    if refused_tools:
+        count = len(refused_tools)
+        listed = ", ".join(f"{tool.name} ({tool.risk.value})" for tool in refused_tools)
+        verb = "declares" if count == 1 else "declare"
+        lines += [
+            "",
+            f"  {count} tool{'' if count == 1 else 's'} {verb} a risk you refused: {listed}",
+            f"  A host running {_as_policy_call(refused)} would",
+            "  refuse this package before importing it.",
+        ]
+
     lines.append("")
-    if inspection.consistent:
+    if not inspection.consistent:
+        lines.append("  This package would be refused. Its code would never be imported.")
+    elif refused_tools:
+        lines += [
+            "  Paperwork is consistent, and this package would still be refused --",
+            "  by your rule, not by preflight's. Its code would never be imported.",
+        ]
+    else:
         lines += [
             "  Paperwork is consistent. preflight did not run this code and cannot",
             "  tell you whether it does what it says.",
         ]
-    else:
-        lines.append("  This package would be refused. Its code would never be imported.")
     return "\n".join(lines)
