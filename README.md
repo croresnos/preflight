@@ -355,6 +355,42 @@ preflight check ./weather      # now there is something to check
 
 It refuses to overwrite an existing manifest without `--force`, and it refuses outright when the folder name is not a valid Python identifier — `import weather-tool` is a syntax error, no manifest can fix that, and writing one anyway would produce a file that only looks like progress.
 
+### When the manifest belongs to something else
+
+`manifest.json` is a popular filename. Browser extensions use it, Figma plugins use it, web apps use it, and none of those are preflight's. Pointing `check` at one of them is a reasonable thing to do — it is often the first thing anyone does — so it gets its own answer rather than a schema error:
+
+```
+preflight check | design_linter\ | nothing was executed
+
+  manifest      not preflight's
+
+  This is a manifest.json, but not one of preflight's. It has none of
+  the fields preflight requires (package_id, visibility, release_ring,
+  entrypoint, plugin), and 13 that preflight does not recognise.
+
+  Plenty of systems keep a file by that name, and preflight cannot
+  read theirs -- it would have to guess what any of it permits. A
+  preflight manifest is written by whoever sets the terms for
+  loading: the package's author, when your host requires one, or
+  you, when you adopt something that never heard of preflight.
+
+  Writing yours means taking that filename:
+      preflight create design_linter --force
+
+  That replaces the file above. Move theirs aside first if the
+  tool it belongs to still needs it.
+```
+
+Note what this does **not** say. It does not call the file invalid, because there is nothing wrong with it — a Figma manifest is a correct Figma manifest, and preflight has no standing to grade it. The distinction is drawn on evidence: a file carrying none of the fields preflight requires was written for something else, and a file carrying some of them was written for preflight and has a mistake in it. The second gets the mistake named, field by field:
+
+```
+  manifest      INVALID
+
+  2 problems with this manifest:
+    entrypoint           Field required
+    plugin.tools.0.risk  Input should be 'read', 'write', 'destructive', ...
+```
+
 ### `preflight demo`
 
 Loads the five bundled example plugins and refuses three of them, so you can see the refusals rather than read about them:
@@ -526,6 +562,7 @@ Every row names the test that proves it. If you doubt a row, run that test; if a
 | 20 | `preflight check` reports on a package without importing it — including one that was importable at the time | `test_inspecting_a_package_never_imports_it`, `test_check_never_imports_the_package_it_is_pointed_at` |
 | 21 | `preflight check --refuse` exits non-zero on a declared risk the caller refused, and reads only declarations — the same limit row 5c has | `test_check_exits_non_zero_on_a_risk_the_caller_refused`, `test_refused_tools_reports_only_what_the_manifest_declared` |
 | 22 | Refusing a risk at the gate stops the plugin with its code still inert, and cannot reach a risk that was never declared | `test_refusing_a_declared_risk_stops_the_janitor_before_it_is_imported`, `test_refusing_a_declared_risk_cannot_reach_a_risk_that_was_never_declared` |
+| 23 | A `manifest.json` belonging to another system is reported as such, not as an invalid preflight manifest | `test_another_systems_manifest_is_reported_as_foreign_rather_than_invalid`, `test_a_preflight_manifest_with_a_mistake_in_it_is_invalid_and_not_foreign` |
 
 Rows 1–14 are the point of the project. Rows 15–17 are what is left over — checks that *cannot* be made before the import, because they are about an object, and there is no object until something has been imported.
 
@@ -665,6 +702,9 @@ No, and this is the most important limitation in this README. `check` reads a pa
 
 **What if the thing I downloaded has no manifest?**
 Then `check` will tell you it has nothing to check, which is the honest answer. `preflight create` writes a manifest skeleton so you can adopt the package on your own terms — but note whose judgement that is: the file records what *you* permit, and preflight did not read the code to fill it in.
+
+**What if it has a `manifest.json`, but the file belongs to some other tool?**
+Then `check` says so and names whose it is not, rather than reporting a schema failure against a file that has nothing wrong with it — see [When the manifest belongs to something else](#when-the-manifest-belongs-to-something-else). Adopting the package still means writing preflight's manifest at that filename, which is a real collision and the output says so.
 
 **Do I have to understand editions, visibility, and release rings?**
 No. They exist for applications that ship one plugin folder to several audiences, they are opt-in through `Policy(edition=...)`, and the defaults handle the single-tier case. Mark your plugins `public` / `stable` and the fields stop mattering.

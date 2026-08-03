@@ -90,6 +90,35 @@ def test_check_on_a_package_with_no_manifest_says_so_and_points_at_create(
     assert "preflight create widget" in out
 
 
+def test_check_on_another_systems_manifest_says_whose_it_is_and_stays_short(
+    tmp_path, capsys
+):
+    # The moment a curious reader decides what preflight is. They point it at
+    # the manifest.json they happen to have -- here a web app's -- and whatever
+    # comes back is the whole impression.
+    folder = _write_package(
+        tmp_path,
+        "webapp",
+        manifest={
+            "name": "Notes",
+            "short_name": "Notes",
+            "start_url": "/",
+            "display": "standalone",
+            "icons": [],
+        },
+    )
+
+    assert main(["check", str(folder)]) == 1
+    out = capsys.readouterr().out
+
+    assert "not preflight's" in out
+    assert "INVALID" not in out
+    assert "preflight create" in out and "--force" in out
+    # The whole report, not just the diagnosis. Twenty lines is something a
+    # person reads; the pydantic dump this replaced ran past fifty.
+    assert len(out.splitlines()) < 20
+
+
 def test_check_lists_every_declared_tool_and_flags_the_ones_beyond_read(
     tmp_path, capsys
 ):
