@@ -91,10 +91,27 @@ def _guess_entrypoint(folder: Path) -> str:
     return f"{module}.plugin:create_plugin"
 
 
+def _not_a_directory(path: Path, command: str) -> str:
+    """Say which of the two things went wrong, because they are fixed differently.
+
+    ``is not a directory`` is true of a path that does not exist and of a path
+    that is a file, and a person who typed the wrong thing has no way to tell
+    which they did. Both exits stay ``2``.
+    """
+    if path.exists():
+        return f"preflight: '{path}' is a file, not a directory"
+    return (
+        f"preflight: '{path}' does not exist.\n"
+        f"preflight {command} works on a package that is already on disk -- it "
+        f"reads\nthe folder, and never creates one. Make the folder and put its "
+        f"Python in it\nfirst, then run this again."
+    )
+
+
 def _check(args: argparse.Namespace) -> int:
     target = Path(args.path)
     if not target.is_dir():
-        print(f"preflight: '{target}' is not a directory", file=sys.stderr)
+        print(_not_a_directory(target, "check"), file=sys.stderr)
         return 2
 
     refuse = _refused_risks(args)
@@ -121,7 +138,7 @@ def _create(args: argparse.Namespace) -> int:
     # a Python package name. `check` resolves for the same reason.
     folder = Path(args.path).resolve()
     if not folder.is_dir():
-        print(f"preflight: '{folder}' is not a directory", file=sys.stderr)
+        print(_not_a_directory(folder, "create"), file=sys.stderr)
         return 2
 
     destination = folder / MANIFEST_NAME
