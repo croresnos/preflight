@@ -49,6 +49,29 @@ def test_the_demo_examples_are_found_without_reference_to_the_working_directory(
     assert (found / "janitor" / "manifest.json").is_file()
 
 
+def test_a_path_that_does_not_exist_is_told_apart_from_one_that_is_a_file(
+    tmp_path, capsys
+):
+    """Both are "not a directory". They are not the same mistake.
+
+    The missing-path case is the first wall a beginner hits: `preflight create
+    plugins/weather` is the obvious thing to type after reading the manual, and
+    `create` deliberately never makes a folder -- it derives the package id, the
+    entrypoint and the rename advice from the folder's name, so there has to be
+    one. Saying so is the difference between a stop and a dead end.
+    """
+    missing = tmp_path / "not_here"
+    assert main(["create", str(missing)]) == 2
+    err = capsys.readouterr().err
+    assert "does not exist" in err
+    assert "never creates one" in err
+
+    a_file = tmp_path / "manifest.json"
+    a_file.write_text("{}", encoding="utf-8")
+    assert main(["check", str(a_file)]) == 2
+    assert "is a file, not a directory" in capsys.readouterr().err
+
+
 def test_check_exits_zero_on_a_package_whose_paperwork_holds_up(tmp_path, capsys):
     folder = _write_package(tmp_path, "widget", manifest=_manifest())
 
@@ -229,7 +252,10 @@ def test_refuse_rejects_an_unknown_risk_name_and_lists_the_valid_ones(
 
 def test_check_on_a_missing_path_exits_two(tmp_path, capsys):
     assert main(["check", str(tmp_path / "nowhere")]) == 2
-    assert "not a directory" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "does not exist" in err
+    # Names the command it was given, not whichever one wrote the helper.
+    assert "preflight check works on a package" in " ".join(err.split())
 
 
 def test_create_writes_a_manifest_that_check_then_accepts(tmp_path, capsys):
