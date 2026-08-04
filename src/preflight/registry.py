@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import os
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -127,6 +128,49 @@ def _module_file(module_name: str) -> Path | None:
     return path.resolve() if path.is_file() else None
 
 
+def _why_unresolvable(module_name: str, root: Path) -> str:
+    """Which of several reasons a module has no file, decided from disk.
+
+    The refusal this accompanies is correct however it was arrived at, but it
+    names the check rather than the mistake, and the mistake is nearly always one
+    of four things. Listing all four and making the reader work out which is
+    theirs is not much better than saying nothing, so look instead: the folder is
+    on disk or it is not, it has an ``__init__.py`` or it does not, the root is on
+    ``sys.path`` or it is not. Those three facts separate every case below.
+
+    Path arithmetic and ``sys.path`` only. Nothing here imports or resolves, and
+    it runs after the refusal is already decided -- a wrong guess about *why*
+    would be a bad diagnosis, never a permission.
+    """
+    parts = module_name.split(".")
+    folder = root.joinpath(*parts)
+    module_file = root.joinpath(*parts[:-1], f"{parts[-1]}.py")
+    on_sys_path = any(entry and Path(entry).resolve() == root for entry in sys.path)
+
+    if folder.is_dir() and not (folder / "__init__.py").is_file():
+        return (
+            f"that folder is on disk but has no __init__.py, so Python treats it as "
+            f"a namespace package and it resolves to no single file. Create an empty "
+            f"'{folder / '__init__.py'}'."
+        )
+    if not ((folder / "__init__.py").is_file() or module_file.is_file()):
+        return (
+            f"no '{parts[-1]}{os.sep}__init__.py' and no '{parts[-1]}.py' inside that "
+            f"root. Check the entrypoint in manifest.json against the names on disk."
+        )
+    if not on_sys_path:
+        return (
+            f"the file is there, but '{root}' is not on sys.path, so the import "
+            f"system cannot see it. preflight never modifies sys.path for you -- add "
+            f"sys.path.insert(0, {str(root)!r}) before loading."
+        )
+    return (
+        f"the file is there and that root is on sys.path, so something earlier on "
+        f"sys.path is answering to '{module_name}' first. Rename the plugin folder "
+        f"to a name no installed package already uses."
+    )
+
+
 def _import_entrypoint(
     entrypoint: str,
     trusted_root: Path | str,
@@ -182,7 +226,8 @@ def _import_entrypoint(
         if located is None:
             raise PluginRejected(
                 f"entrypoint module '{ancestor}' has no file on disk, so it cannot "
-                f"be shown to live inside the trusted plugin root '{root}'"
+                f"be shown to live inside the trusted plugin root '{root}'\n"
+                f"{_why_unresolvable(ancestor, root)}"
             )
         if not located.is_relative_to(root):
             raise PluginRejected(
