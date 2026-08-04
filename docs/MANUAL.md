@@ -70,6 +70,23 @@ preflight demo
 That loads five bundled example plugins and refuses three of them. It runs from any
 directory — you do not need to be inside a checkout.
 
+Those are somebody else's plugins, failing in ways they chose. For one of your own
+to take apart:
+
+```
+preflight try weather-sandbox
+cd weather-sandbox
+python host.py
+```
+
+That writes a working host, one plugin, and its manifest, then names three ways to
+break them. Section 3 builds the same thing by hand, which is worth doing once;
+`try` is for when you would rather start from something that already runs.
+
+`try` writes plugin code. `create` (section 5) deliberately does not — a manifest
+records what *you* permit, so preflight inventing it would defeat the point. Treat
+what `try` writes as a sandbox, not as the start of something you ship.
+
 ---
 
 ## 3. Your first host, start to finish

@@ -40,7 +40,7 @@ There are two points in time where preflight shows up, and confusing them is the
 
 | When | What | Who runs it |
 |---|---|---|
-| **Once**, when you adopt a plugin | `preflight check`, `preflight create` | you, at a terminal |
+| **Once**, when you adopt a plugin | `preflight check`, `preflight create`, `preflight try` | you, at a terminal |
 | **Every launch, for the life of the program** | `load_plugins(...)` | your code, automatically |
 
 The second row is preflight. The first row is the on-ramp to it — a way to read what you are being asked to trust, and to write down what you will permit, before the gate in the second row ever sees it.
@@ -64,6 +64,7 @@ The second row is preflight. The first row is the on-ramp to it — a way to rea
 - **`preflight check ./thing --refuse destructive,financial`** — the same reading, decided against *your* rules. This is not a fourth thing preflight knows how to do; it is `Policy(refuse_tool_risks=...)` from the list above, asked at a terminal instead of at startup.
 - **`preflight create ./thing`** — write a manifest for a package that has none, recording what *you* permit. This is how a third-party package that never heard of preflight gets adopted on your terms.
 - **`preflight demo`** — load five bundled example plugins and refuse three of them, so the refusals are something you watch rather than read about. Add `--refuse destructive` to refuse a fourth.
+- **`preflight try`** — write a working host and one plugin into a folder, so you have something of your own to break. Unlike `create`, it invents the code as well as the paperwork; it is a sandbox, not a starting point for something you intend to ship.
 
 ### What preflight is not
 
@@ -434,6 +435,60 @@ preflight | plugins\ | 5 packages found
 `janitor` is a plugin with nothing wrong with it, refused for being honest about something you said you did not want — and refused while still inert on disk, so its tripwire never fires. `impostor` is the comparison: it declares two read-only tools and produces a destructive third one only once loaded, so `--refuse` never saw it. It is caught anyway, but afterwards, by comparing what it reported against what it declared.
 
 **preflight enforces declarations. It does not detect concealment.** Those two rows are the shortest statement of that difference the project can make.
+
+### `preflight try`
+
+`demo` is somebody else's plugins failing in ways they chose. `try` gives you your own to break:
+
+```
+preflight try weather-sandbox
+cd weather-sandbox
+python host.py
+```
+
+```
+wrote .../weather-sandbox
+      host.py                          the gate, 12 lines
+      plugins/weather/__init__.py      empty, and load-bearing
+      plugins/weather/plugin.py        the plugin
+      plugins/weather/manifest.json    what it is permitted to do
+
+  This one loads. Nothing is wrong with it, which is the least
+  interesting state it can be in.
+```
+
+```
+preflight | plugins\ | 1 package found
+
+  LOADED   weather  Weather 1.0.0 - 1 tool
+
+  1 loaded, 0 refused
+
+today: 18C and raining
+```
+
+Now break it. Delete `plugins/weather/__init__.py` and rerun the host:
+
+```
+  REFUSED  weather  never imported
+                    entrypoint module 'weather' has no file on disk, so it cannot be shown to live inside the trusted plugin root '.../weather-sandbox/plugins'
+                    that folder is on disk but has no __init__.py, so Python treats it as a namespace package and it resolves to no single file. Create an empty '.../weather-sandbox/plugins/weather/__init__.py'.
+
+  0 loaded, 1 refused -- 1 of the 1 stopped before any of their code ran
+```
+
+Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.json` alone:
+
+```
+  REFUSED  weather  imported, then rejected
+                    runtime manifest for 'local.weather' does not match its validated package manifest
+
+  0 loaded, 1 refused -- 0 of the 1 stopped before any of their code ran
+```
+
+`1 of the 1` against `0 of the 1` is the whole distinction the library is built around, on your own code, in about a minute. The second one's top-level code ran before anything caught it — which is the honest limit of a check that needs an object to interrogate.
+
+This command writes plugin code, which `create` deliberately refuses to do. That is the difference between a sandbox and a real adoption: a manifest records what *you* permit, and preflight guessing at that would defeat the point. Do not build on what `try` writes.
 
 ---
 

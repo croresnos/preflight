@@ -1,4 +1,4 @@
-"""The three commands, including their exit codes.
+"""The four commands, including their exit codes.
 
 ``check`` is meant to be run against something you downloaded and have not read,
 so two of its properties are load-bearing: it must never import the thing it is
@@ -386,3 +386,58 @@ def test_demo_refusing_destructive_does_not_catch_the_plugin_that_lied(capsys):
     assert "REFUSED impostor imported, then rejected" in " ".join(out.split())
     assert "does not match its validated package manifest" in out
     assert "preflight enforces declarations. It does not detect concealment." in out
+
+
+def test_try_writes_a_sandbox_that_actually_loads(tmp_path, capsys):
+    # The point of the command is that the thing it writes works before you
+    # break it. If `check` refuses what `try` just produced, every instruction
+    # printed underneath it is wrong.
+    root = tmp_path / "sandbox"
+    assert main(["try", str(root)]) == 0
+    capsys.readouterr()
+
+    assert (root / "host.py").is_file()
+    assert (root / "plugins" / "weather" / "__init__.py").is_file()
+    assert main(["check", str(root / "plugins" / "weather")]) == 0
+
+
+def test_try_sandbox_manifest_and_runtime_manifest_agree(tmp_path, capsys):
+    # The two copies of the plugin's identity are written by two different
+    # string constants, so nothing but a test keeps them in step. Drift here
+    # would make the sandbox refuse itself with check 17 on first run -- the
+    # break the walkthrough saves for last.
+    root = tmp_path / "sandbox"
+    assert main(["try", str(root)]) == 0
+    capsys.readouterr()
+
+    package = root / "plugins" / "weather"
+    on_disk = json.loads((package / "manifest.json").read_text(encoding="utf-8"))["plugin"]
+    source = (package / "plugin.py").read_text(encoding="utf-8")
+
+    assert on_disk["module_version"] in source
+    assert on_disk["name"] in source
+    assert on_disk["tools"][0]["name"] in source
+
+
+def test_try_refuses_a_folder_that_is_not_empty(tmp_path, capsys):
+    # Writing host.py over somebody's host.py is the one irreversible thing
+    # this command could do.
+    root = tmp_path / "sandbox"
+    root.mkdir()
+    (root / "host.py").write_text("mine\n", encoding="utf-8")
+
+    assert main(["try", str(root)]) == 2
+    assert (root / "host.py").read_text(encoding="utf-8") == "mine\n"
+    assert "already exists and is not empty" in capsys.readouterr().err
+
+    assert main(["try", str(root), "--force"]) == 0
+    assert (root / "host.py").read_text(encoding="utf-8") != "mine\n"
+
+
+def test_try_does_not_touch_sys_path(tmp_path, capsys):
+    # `try` writes the sys.path line into host.py precisely because preflight
+    # will not run it for you. It must not quietly do it here either.
+    before = list(sys.path)
+    assert main(["try", str(tmp_path / "sandbox")]) == 0
+    capsys.readouterr()
+    assert sys.path == before
