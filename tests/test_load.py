@@ -173,6 +173,119 @@ def test_code_ran_separates_a_refusal_before_the_import_from_one_after(
     assert "outsider" not in _tripwires(tmp_path)
 
 
+def test_a_bad_manifest_is_explained_in_the_report_and_not_dumped_into_it(
+    tmp_path, monkeypatch
+):
+    """The library path owes a reader the same answer the CLI gives.
+
+    ``preflight check`` stopped printing ``str(ValidationError)`` in 4f777ed, but
+    a host calling ``load_plugins`` still got the raw dump -- a URL and an echo of
+    the whole input under every field -- folded into a report row that is two
+    spaces wide. Same file, same mistake, two different answers depending on
+    which door you came in.
+    """
+    _write_plugin(tmp_path, "broken", package_id="example.broken")
+    manifest = tmp_path / "broken" / "manifest.json"
+    payload = json.loads(manifest.read_text())
+    del payload["visibility"]
+    del payload["release_ring"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = load_plugins(tmp_path, allow=["example.broken"])
+    reason = result.outcomes[0].reason or ""
+
+    assert "2 problems with this manifest:" in reason
+    assert "visibility" in reason and "release_ring" in reason
+    # The three tells of a pydantic dump, none of which belong in a report.
+    assert "https://" not in reason
+    assert "further information" not in reason
+    assert "input_value" not in reason
+    assert _tripwires(tmp_path) == set()
+
+
+def test_a_reason_that_runs_to_several_lines_stays_in_its_own_column(
+    tmp_path, monkeypatch
+):
+    # A list of bad fields is a list, not a sentence, so a reason can be several
+    # lines. Before the report indented every one of them, the second line
+    # started at column 0 and read as a row about a different plugin.
+    _write_plugin(tmp_path, "broken", package_id="example.broken")
+    manifest = tmp_path / "broken" / "manifest.json"
+    payload = json.loads(manifest.read_text())
+    del payload["visibility"]
+    del payload["release_ring"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    text = load_plugins(tmp_path, allow=["example.broken"]).text()
+
+    lines = text.splitlines()
+    row = next(line for line in lines if "REFUSED" in line)
+    column = row.index("never imported")
+
+    opening = next(line for line in lines if "invalid plugin manifest" in line)
+    assert len(opening) - len(opening.lstrip()) == column
+    detail = [line for line in lines if "Field required" in line]
+    assert len(detail) == 2
+    # Indented two past the reason column by the explanation's own field table,
+    # which is the point -- the nesting survives being placed in the report.
+    assert all(len(line) - len(line.lstrip()) == column + 2 for line in detail)
+    assert all(line == line.rstrip() for line in lines)
+
+
+def test_a_manifest_belonging_to_another_system_is_not_called_broken(
+    tmp_path, monkeypatch
+):
+    # A manifest.json declaring none of preflight's required fields is somebody
+    # else's file, and saying "invalid" about it is a false claim. The CLI has
+    # said so since 4f777ed; a host loading a directory gets the same answer.
+    _write_plugin(tmp_path, "browser_ext", package_id="example.ext")
+    tmp_path.joinpath("browser_ext", "manifest.json").write_text(
+        json.dumps({"manifest_version": 3, "name": "Some Extension", "version": "1.0"}),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = load_plugins(tmp_path, allow=["example.ext"])
+    reason = result.outcomes[0].reason or ""
+
+    assert "not one of preflight's" in reason
+    assert "https://" not in reason
+
+
+def test_a_runtime_manifest_is_explained_without_being_called_someone_elses(
+    tmp_path, monkeypatch
+):
+    """The third dump site, and the one place the foreign verdict must not fire.
+
+    This manifest is an object preflight's own loader just produced, not a file
+    anyone pointed at preflight, so "this belongs to another system" is not an
+    available answer no matter how few fields it has.
+    """
+    _write_plugin(tmp_path, "wrong", package_id="example.wrong")
+    tmp_path.joinpath("wrong", "plugin.py").write_text(
+        "class _Plugin:\n"
+        "    @property\n"
+        "    def manifest(self):\n"
+        "        return {'name': 'Wrong', 'module_version': 1.0}\n"
+        "\n"
+        "def create_plugin():\n"
+        "    return _Plugin()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    result = load_plugins(tmp_path, allow=["example.wrong"])
+    reason = result.outcomes[0].reason or ""
+
+    assert reason.startswith("runtime manifest for 'example.wrong' is invalid:")
+    assert "plugin_id" in reason
+    assert "not one of preflight's" not in reason
+    assert "https://" not in reason
+    assert result.outcomes[0].code_ran is True
+
+
 def test_a_package_that_ran_and_then_failed_is_not_reported_as_inert(
     tmp_path, monkeypatch
 ):

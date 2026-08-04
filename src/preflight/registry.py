@@ -33,6 +33,7 @@ from preflight.manifest import (
     Tool,
     ToolRisk,
     Visibility,
+    manifest_error_message,
 )
 
 
@@ -275,7 +276,9 @@ class PluginRegistry:
             )
         except (AttributeError, ValidationError) as exc:
             raise PluginRejected(
-                f"invalid plugin package manifest from {origin}: {exc}"
+                manifest_error_message(
+                    f"invalid plugin package manifest from {origin}", exc
+                )
             ) from exc
         self._validate_preload_policy(package)
         plugin_id = package.plugin.plugin_id
@@ -311,8 +314,15 @@ class PluginRegistry:
         try:
             runtime_manifest = PluginManifest.model_validate(instance.manifest)
         except ValidationError as exc:
+            # from_file=False: this came back from the plugin's own code, not off
+            # disk, so "it belongs to another system" is not a verdict available
+            # here -- there is no file for it to belong to.
             raise PluginRejected(
-                f"runtime manifest for '{package.package_id}' is invalid: {exc}"
+                manifest_error_message(
+                    f"runtime manifest for '{package.package_id}' is invalid",
+                    exc,
+                    from_file=False,
+                )
             ) from exc
         if runtime_manifest != package.plugin:
             raise PluginRejected(
@@ -362,7 +372,9 @@ class PluginRegistry:
             payload = json.loads(path.read_text(encoding="utf-8"))
             package = PluginPackageManifest.model_validate(payload)
         except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as exc:
-            raise PluginRejected(f"invalid plugin manifest '{path}': {exc}") from exc
+            raise PluginRejected(
+                manifest_error_message(f"invalid plugin manifest '{path}'", exc)
+            ) from exc
 
         return self.register(
             package,
