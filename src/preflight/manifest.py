@@ -12,11 +12,19 @@ decision using only what is here.
 
 from __future__ import annotations
 
+import textwrap
 from datetime import datetime
 from enum import Enum
 from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class ContractModel(BaseModel):
@@ -186,6 +194,107 @@ class PluginPackageManifest(ContractModel):
         ):
             raise ValueError("restricted plugins cannot declare the stable release ring")
         return self
+
+
+#: How many individual field errors are worth printing before the list stops
+#: being read. Past this a person is scrolling, not deciding.
+_MAX_REPORTED_ERRORS = 6
+
+#: Prose in an explanation is wrapped to this. The field tables below are not
+#: wrapped -- a column that moves is worse to read than one that runs long.
+_LINE = 68
+
+
+def _required_fields() -> tuple[str, ...]:
+    """The manifest fields with no default, in declaration order.
+
+    Derived from the model rather than listed here, so it stays true if the
+    schema gains or loses one.
+    """
+    return tuple(
+        name
+        for name, field in PluginPackageManifest.model_fields.items()
+        if field.is_required()
+    )
+
+
+def _where(error: dict) -> str:
+    """The dotted path to the field an error is about."""
+    return ".".join(str(part) for part in error["loc"]) or "(the file itself)"
+
+
+def explain_manifest_error(
+    exc: Exception, *, from_file: bool = True
+) -> tuple[str, bool]:
+    """Why the manifest did not parse, in words, and whether it is even ours.
+
+    ``str(ValidationError)`` is a per-error dump with a documentation URL and an
+    echo of the input under every entry -- upwards of fifty lines for a file
+    whose only crime is belonging to a different tool. Plenty of systems keep a
+    ``manifest.json``, so someone pointing preflight at a browser extension or a
+    web app is not making a mistake, they are testing what this thing is. That
+    is the moment they decide preflight is broken, and a wall of pydantic is how
+    they decide it. Answer with the short true thing and the next command.
+
+    This lives beside the model rather than beside either caller because both
+    :mod:`preflight.inspect` and :mod:`preflight.registry` have to say the same
+    thing about the same file, and a security core that reaches into a reporting
+    module for its wording is a dependency pointing the wrong way.
+
+    ``from_file=False`` says the errors came from an object a plugin handed back
+    at runtime rather than from a file on disk. "This belongs to another system"
+    is then not an available verdict, because there is no file to belong to
+    anyone -- the caller validated something preflight's own loader produced.
+
+    Returns the description, and whether the file is another system's manifest.
+    """
+    if not isinstance(exc, ValidationError):
+        return str(exc), False
+
+    errors = exc.errors()
+    required = _required_fields()
+    absent = {
+        str(error["loc"][0])
+        for error in errors
+        if error["type"] == "missing" and len(error["loc"]) == 1
+    }
+    unknown = sum(1 for error in errors if error["type"] == "extra_forbidden")
+
+    # Not one required field is present. A preflight manifest with a mistake in
+    # it still looks like a preflight manifest; this does not look like one at
+    # all, and calling it invalid would be a false claim about someone else's
+    # perfectly good file.
+    if from_file and absent >= set(required):
+        return (
+            textwrap.fill(
+                f"This is a manifest.json, but not one of preflight's. It has "
+                f"none of the fields preflight requires ({', '.join(required)}), "
+                f"and {unknown} that preflight does not recognise.",
+                width=_LINE,
+            ),
+            True,
+        )
+
+    shown = errors[:_MAX_REPORTED_ERRORS]
+    count = len(errors)
+    lines = [f"{count} problem{'' if count == 1 else 's'} with this manifest:"]
+    width = max(len(_where(error)) for error in shown)
+    lines += [f"  {_where(error):<{width}}  {error['msg']}" for error in shown]
+    if count > len(shown):
+        lines.append(f"  ... and {count - len(shown)} more")
+    return "\n".join(lines), False
+
+
+def manifest_error_message(prefix: str, exc: Exception, *, from_file: bool = True) -> str:
+    """``prefix``, then the explanation -- on one line when it fits on one.
+
+    The refusals this builds are read in two places with different shapes: raw,
+    as ``str(PluginRejected)``, and indented under a folder name in a load
+    report. Deciding the line break here keeps both callers from guessing.
+    """
+    detail, _ = explain_manifest_error(exc, from_file=from_file)
+    separator = "\n" if "\n" in detail else " "
+    return f"{prefix}:{separator}{detail}"
 
 
 @runtime_checkable

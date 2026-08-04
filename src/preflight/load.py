@@ -138,8 +138,12 @@ class LoadReport:
                 else outcome.stage
             )
             lines.append(f"  {label}  {outcome.folder:<{width}}  {detail}")
-            if outcome.reason:
-                lines.append(f"  {' ' * (len(label) + 2 + width + 2)}{outcome.reason}")
+            # A reason may run to several lines -- a manifest with three bad
+            # fields is a list, not a sentence. Every line of it sits under the
+            # same column, or the second one reads as a row of its own.
+            indent = " " * (2 + len(label) + 2 + width + 2)
+            for line in (outcome.reason or "").splitlines():
+                lines.append(f"{indent}{line}".rstrip())
 
         refused = self.refused
         summary = f"  {len(self.loaded)} loaded, {len(refused)} refused"

@@ -23,14 +23,18 @@ from __future__ import annotations
 
 import json
 import os
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from pydantic import ValidationError
 
-from preflight.manifest import PluginPackageManifest, Tool, ToolRisk
+from preflight.manifest import (
+    PluginPackageManifest,
+    Tool,
+    ToolRisk,
+    explain_manifest_error,
+)
 
 MANIFEST_NAME = "manifest.json"
 
@@ -87,84 +91,6 @@ class Inspection:
         return tuple(tool for tool in self.package.plugin.tools if tool.risk in refused)
 
 
-#: How many individual field errors are worth printing before the list stops
-#: being read. Past this a person is scrolling, not deciding.
-_MAX_REPORTED_ERRORS = 6
-
-#: Prose in a report is wrapped to this, and indented by two when printed. The
-#: field tables below are not wrapped -- a column that moves is worse to read
-#: than one that runs long.
-_LINE = 68
-
-
-def _required_fields() -> tuple[str, ...]:
-    """The manifest fields with no default, in declaration order.
-
-    Derived from the model rather than listed here, so it stays true if the
-    schema gains or loses one.
-    """
-    return tuple(
-        name
-        for name, field in PluginPackageManifest.model_fields.items()
-        if field.is_required()
-    )
-
-
-def _explain(exc: Exception) -> tuple[str, bool]:
-    """Why the manifest did not parse, in words, and whether it is even ours.
-
-    ``str(ValidationError)`` is a per-error dump with a documentation URL and an
-    echo of the input under every entry -- upwards of fifty lines for a file
-    whose only crime is belonging to a different tool. Plenty of systems keep a
-    ``manifest.json``, so someone pointing ``check`` at a browser extension or a
-    web app is not making a mistake, they are testing what this thing is. That
-    is the moment they decide preflight is broken, and a wall of pydantic is how
-    they decide it. Answer with the short true thing and the next command.
-
-    Returns the description, and whether the file is another system's manifest.
-    """
-    if not isinstance(exc, ValidationError):
-        return str(exc), False
-
-    errors = exc.errors()
-    required = _required_fields()
-    absent = {
-        str(error["loc"][0])
-        for error in errors
-        if error["type"] == "missing" and len(error["loc"]) == 1
-    }
-    unknown = sum(1 for error in errors if error["type"] == "extra_forbidden")
-
-    # Not one required field is present. A preflight manifest with a mistake in
-    # it still looks like a preflight manifest; this does not look like one at
-    # all, and calling it invalid would be a false claim about someone else's
-    # perfectly good file.
-    if absent >= set(required):
-        return (
-            textwrap.fill(
-                f"This is a manifest.json, but not one of preflight's. It has "
-                f"none of the fields preflight requires ({', '.join(required)}), "
-                f"and {unknown} that preflight does not recognise.",
-                width=_LINE,
-            ),
-            True,
-        )
-
-    shown = errors[:_MAX_REPORTED_ERRORS]
-    count = len(errors)
-    lines = [f"{count} problem{'' if count == 1 else 's'} with this manifest:"]
-    width = max(len(_where(error)) for error in shown)
-    lines += [f"  {_where(error):<{width}}  {error['msg']}" for error in shown]
-    if count > len(shown):
-        lines.append(f"  ... and {count - len(shown)} more")
-    return "\n".join(lines), False
-
-
-def _where(error: dict) -> str:
-    """The dotted path to the field an error is about."""
-    return ".".join(str(part) for part in error["loc"]) or "(the file itself)"
-
-
 def _resolve_on_disk(module_name: str, import_root: Path) -> tuple[Path | None, str]:
     """Locate a dotted module under ``import_root`` using the filesystem alone.
 
@@ -213,7 +139,7 @@ def inspect_package(folder: Path | str, *, import_root: Path | str | None = None
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         package = PluginPackageManifest.model_validate(payload)
     except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as exc:
-        problem, foreign = _explain(exc)
+        problem, foreign = explain_manifest_error(exc)
         return Inspection(
             folder=package_folder,
             manifest_path=manifest_path,
