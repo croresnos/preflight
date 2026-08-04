@@ -13,6 +13,7 @@ never resolve.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -417,6 +418,24 @@ def test_try_sandbox_manifest_and_runtime_manifest_agree(tmp_path, capsys):
     assert on_disk["module_version"] in source
     assert on_disk["name"] in source
     assert on_disk["tools"][0]["name"] in source
+
+
+def test_try_prints_break_commands_that_would_actually_bite(tmp_path, capsys):
+    # The three breaks are printed as commands to paste, so a rename anywhere
+    # in the sandbox templates turns them into no-ops that appear to work and
+    # refuse nothing -- the worst possible outcome for a teaching command.
+    root = tmp_path / "sandbox"
+    assert main(["try", str(root)]) == 0
+    out = capsys.readouterr().out
+
+    package = root / "plugins" / "weather"
+    assert (package / "__init__.py").is_file()
+    assert "weather.plugin" in (package / "manifest.json").read_text(encoding="utf-8")
+    assert '"1.0.0"' in (package / "plugin.py").read_text(encoding="utf-8")
+
+    assert out.count("python host.py") == 4  # one to run it, one per break
+    expected = "Remove-Item" if os.name == "nt" else "rm "
+    assert expected in out
 
 
 def test_try_refuses_a_folder_that_is_not_empty(tmp_path, capsys):

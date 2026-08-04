@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -253,6 +254,43 @@ _SANDBOX_MANIFEST = {
 }
 
 
+_BREAK_TITLES = (
+    "delete the __init__.py that makes it a package",
+    "misspell the entrypoint in manifest.json",
+    "bump module_version in plugin.py only, not in manifest.json",
+)
+
+_BREAKS_POSIX = (
+    (
+        "rm plugins/weather/__init__.py",
+        "touch plugins/weather/__init__.py",
+    ),
+    (
+        "sed -i 's/weather\\.plugin/wether.plugin/' plugins/weather/manifest.json",
+        "sed -i 's/wether\\.plugin/weather.plugin/' plugins/weather/manifest.json",
+    ),
+    (
+        "sed -i 's/\"1\\.0\\.0\"/\"2.0.0\"/' plugins/weather/plugin.py",
+        "sed -i 's/\"2\\.0\\.0\"/\"1.0.0\"/' plugins/weather/plugin.py",
+    ),
+)
+
+_BREAKS_WINDOWS = (
+    (
+        "Remove-Item plugins\\weather\\__init__.py",
+        "New-Item -ItemType File plugins\\weather\\__init__.py",
+    ),
+    (
+        "(Get-Content plugins\\weather\\manifest.json) -replace 'weather\\.plugin','wether.plugin' | Set-Content plugins\\weather\\manifest.json",
+        "(Get-Content plugins\\weather\\manifest.json) -replace 'wether\\.plugin','weather.plugin' | Set-Content plugins\\weather\\manifest.json",
+    ),
+    (
+        "(Get-Content plugins\\weather\\plugin.py) -replace '\"1\\.0\\.0\"','\"2.0.0\"' | Set-Content plugins\\weather\\plugin.py",
+        "(Get-Content plugins\\weather\\plugin.py) -replace '\"2\\.0\\.0\"','\"1.0.0\"' | Set-Content plugins\\weather\\plugin.py",
+    ),
+)
+
+
 def _try(args: argparse.Namespace) -> int:
     """Write a working host and one plugin, so there is something to break.
 
@@ -292,10 +330,14 @@ def _try(args: argparse.Namespace) -> int:
     print(f"      cd {root}")
     print("      python host.py")
     print()
-    print("  Then break it, and read the refusal before you read the fix:")
-    print("    - delete plugins/weather/__init__.py")
-    print("    - misspell the entrypoint in manifest.json ('wether')")
-    print("    - bump module_version in plugin.py only, not in manifest.json")
+    print("  Then break it, three times. Read the refusal before you read the fix.")
+    breaks = _BREAKS_WINDOWS if os.name == "nt" else _BREAKS_POSIX
+    for number, (title, (break_it, undo)) in enumerate(zip(_BREAK_TITLES, breaks), 1):
+        print()
+        print(f"  {number}. {title}")
+        print(f"       {break_it}")
+        print("       python host.py")
+        print(f"       {undo}   # undo")
     print()
     print("  The first two are refused from the manifest alone -- the plugin's")
     print("  code never runs. The third is caught after importing it, and the")
