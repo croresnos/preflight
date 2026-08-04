@@ -313,8 +313,15 @@ def test_create_accepts_an_awkward_folder_name_when_given_an_explicit_entrypoint
 
 
 def test_demo_loads_two_plugins_and_refuses_three(capsys):
+    before = list(sys.path)
     assert main(["demo"]) == 0
     out = capsys.readouterr().out
+
+    # The demo is the only part of preflight that puts a folder on sys.path, and
+    # it is reachable in-process as `cli.main(["demo"])`. It leaves the path as
+    # it found it, or the caller's next import answers to a name they never
+    # asked for -- which is what it did to the rest of this suite until 2026-08-03.
+    assert sys.path == before
 
     assert out.count("LOADED") == 2
     assert out.count("REFUSED") == 3
