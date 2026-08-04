@@ -8,7 +8,13 @@ preflight moves every decision in front of the import. It reads a JSON manifest,
 
 ```
 python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
+python -c "import preflight, sys; print(preflight.__version__, sys.executable)"
 ```
+
+The second line is not ceremony. `preflight --version` answers from whatever is
+first on your `PATH`, which may be an older copy in a different environment; the
+import answers from the interpreter you are actually about to run your host with.
+If they disagree, the one on `PATH` is the wrong one.
 
 This file explains what preflight is and specifies what it checks. If you would
 rather start typing, **[the manual](docs/MANUAL.md)** walks from an empty directory
@@ -781,9 +787,15 @@ Because settings are host code, and host code is the one thing on this boundary 
 
 ```
 python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
+python -c "import preflight, sys; print(preflight.__version__, sys.executable)"
 ```
 
 **Python 3.11+.** One runtime dependency: `pydantic>=2`.
+
+Check the second line's output before going further. `preflight --version` resolves
+through `PATH` and will happily answer from an install in some other environment,
+including one that predates the install you just ran; importing it answers from
+the interpreter that will actually run your host.
 
 That puts a `preflight` command on your PATH, and it works from any directory — the commands take the path you give them and never read the working directory. `python -m preflight` does the same thing if you would rather not depend on the script.
 
