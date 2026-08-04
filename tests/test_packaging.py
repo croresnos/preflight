@@ -69,6 +69,17 @@ def test_the_wheel_carries_the_library_itself(wheel_contents):
     assert "preflight/registry.py" in wheel_contents
 
 
+def test_the_wheel_carries_the_marker_that_makes_its_annotations_usable(wheel_contents):
+    """pyproject claims `Typing :: Typed`, and PEP 561 decides whether that is true.
+
+    Without a `py.typed` inside the installed package a type checker is required
+    to ignore every annotation in it. The annotations are all still written; a
+    dependent project's mypy would simply refuse to look at any of them, and the
+    classifier would be a claim about a source tree nobody but the author has.
+    """
+    assert "preflight/py.typed" in wheel_contents
+
+
 def test_the_wheel_carries_no_compiled_leftovers(wheel_contents):
     # The examples are copied out of a working tree that has been run, so this
     # is a live risk rather than a hypothetical one.
