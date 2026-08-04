@@ -207,18 +207,30 @@ def _demo(args: argparse.Namespace) -> int:
     from preflight.load import Policy, load_plugins
 
     refuse = _refused_risks(args)
-    sys.path.insert(0, str(examples))
-    result = load_plugins(
-        examples,
-        allow=[
-            "example.greeter",
-            "example.trespasser",
-            "example.collider",
-            "example.impostor",
-            "example.janitor",
-        ],
-        policy=Policy(refuse_tool_risks=refuse),
-    )
+
+    # The demo has to play the host, and a host puts its plugin folder on
+    # sys.path -- but it puts it back. This function is reachable as
+    # `preflight.cli.main(["demo"])` from inside somebody else's program, and a
+    # library whose documented promise is that it never touches sys.path does not
+    # get to leave an entry behind. Anything already imported stays imported;
+    # sys.modules is not what is being restored here.
+    entry = str(examples)
+    sys.path.insert(0, entry)
+    try:
+        result = load_plugins(
+            examples,
+            allow=[
+                "example.greeter",
+                "example.trespasser",
+                "example.collider",
+                "example.impostor",
+                "example.janitor",
+            ],
+            policy=Policy(refuse_tool_risks=refuse),
+        )
+    finally:
+        if sys.path and sys.path[0] == entry:
+            del sys.path[0]
     print()
     print(result)
     print()
