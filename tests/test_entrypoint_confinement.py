@@ -190,6 +190,117 @@ def test_an_entrypoint_naming_a_builtin_module_is_refused(tmp_path: Path):
     assert registry.available() == ()
 
 
+def _refusal_for(root: Path, entrypoint: str) -> str:
+    """Load a probe package with ``entrypoint`` and return why it was refused.
+
+    Probe packages below are named after nothing else in this repository on
+    purpose. ``find_spec`` answers from ``sys.modules`` when a name is already
+    imported, so a probe called ``greeter`` gets the bundled example's spec once
+    any earlier test has run the demo, and the test measures the session instead
+    of the code. The refusal stays correct either way -- the cached spec points
+    outside the trusted root and fails the boundary check -- but it is a
+    different refusal, for a different reason, than the one under test.
+    """
+    manifest_path = _write_manifest(
+        root,
+        _manifest_payload(
+            package_id="example.unresolved",
+            plugin_id="unresolved.probe",
+            entrypoint=entrypoint,
+        ),
+    )
+    registry = public_build(allowed_package_ids={"example.unresolved"})
+    with pytest.raises(PluginRejected) as refusal:
+        registry.load_manifest_file(manifest_path, trusted_root=root)
+    return str(refusal.value)
+
+
+def test_a_folder_without_an_init_is_told_it_is_a_folder_without_an_init(
+    tmp_path: Path, monkeypatch
+):
+    """"No file on disk" is true of four different mistakes. Say which.
+
+    This is the most likely refusal a first-timer sees, and on its own it names
+    the check that failed rather than the thing they did. The check is doing the
+    right thing in every one of these cases -- the refusal is correct and the
+    boundary holds. What follows it is a diagnosis, decided from the filesystem
+    after the decision is already made, and it can never widen what loads.
+    """
+    root = tmp_path / "plugins"
+    (root / "initless").mkdir(parents=True)
+    (root / "initless" / "plugin.py").write_text(
+        "def create_plugin():\n    return None\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(root))
+
+    reason = _refusal_for(root, "initless.plugin:create_plugin")
+
+    assert "has no file on disk" in reason
+    assert "no __init__.py" in reason
+    assert str(root / "initless" / "__init__.py") in reason
+
+
+def test_a_name_that_is_not_in_the_root_at_all_points_at_the_manifest(
+    tmp_path: Path, monkeypatch
+):
+    # The typo case, and the renamed-folder case, which look identical from here:
+    # the entrypoint names something the trusted root does not contain.
+    root = tmp_path / "plugins"
+    (root / "weatherly").mkdir(parents=True)
+    (root / "weatherly" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(root))
+
+    reason = _refusal_for(root, "wetherly.plugin:create_plugin")
+
+    assert "has no file on disk" in reason
+    assert "wetherly" in reason
+    assert "manifest.json" in reason
+
+
+def test_a_root_that_is_not_on_sys_path_says_so_rather_than_blaming_the_plugin(
+    tmp_path: Path,
+):
+    """Deliberately no ``syspath_prepend``: that is the mistake under test.
+
+    ``load_plugins`` catches this before it can happen, but the registry is a
+    supported entry point of its own and reaches this line with a package that is
+    faultless -- every file present, every name spelled right.
+    """
+    root = tmp_path / "plugins"
+    (root / "offpath").mkdir(parents=True)
+    (root / "offpath" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "offpath" / "plugin.py").write_text(
+        "def create_plugin():\n    return None\n", encoding="utf-8"
+    )
+
+    reason = _refusal_for(root, "offpath.plugin:create_plugin")
+
+    assert "not on sys.path" in reason
+    assert "preflight never modifies sys.path" in reason
+    assert "sys.path.insert(0," in reason
+
+
+def test_a_plugin_folder_named_after_a_builtin_module_is_told_it_collides(
+    tmp_path: Path, monkeypatch
+):
+    # The residual case, and a real one: `time` is compiled into the interpreter,
+    # so it answers to the name before the trusted root is ever consulted and
+    # reports no file to compare. Everything about the package is right, which is
+    # exactly why the other three diagnoses would be wrong here.
+    root = tmp_path / "plugins"
+    (root / "time").mkdir(parents=True)
+    (root / "time" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "time" / "plugin.py").write_text(
+        "def create_plugin():\n    return None\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(root))
+
+    reason = _refusal_for(root, "time.plugin:create_plugin")
+
+    assert "answering to 'time' first" in reason
+    assert "Rename the plugin folder" in reason
+
+
 def test_a_dotted_entrypoint_cannot_execute_an_out_of_tree_parent_package(
     tmp_path: Path, monkeypatch
 ):
