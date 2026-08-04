@@ -1,10 +1,11 @@
 """``preflight`` on the command line.
 
-Three commands, and the important one is the first::
+Four commands, and the important one is the first::
 
     preflight check  ./some-plugin     # read its paperwork. Executes nothing.
     preflight create ./some-plugin     # write down what you will permit it to do
     preflight demo                     # watch three plugins get refused
+    preflight try                      # a host and a plugin, to break yourself
 
 ``check`` is the command you run on something you downloaded and have not read.
 It is safe to point at untrusted code because it never imports it -- see
@@ -194,6 +195,114 @@ def _create(args: argparse.Namespace) -> int:
     return 0
 
 
+_SANDBOX_PLUGIN = '''\
+from preflight import PluginManifest
+
+_MANIFEST = PluginManifest.model_validate({
+    "plugin_id": "weather",
+    "name": "Weather",
+    "module_version": "1.0.0",
+    "tools": [{"name": "weather.today", "risk": "read"}],
+})
+
+
+class Weather:
+    @property
+    def manifest(self):
+        return _MANIFEST
+
+    def today(self):
+        return "18C and raining"
+
+
+def create_plugin():
+    return Weather()
+'''
+
+_SANDBOX_HOST = '''\
+import sys
+from pathlib import Path
+
+from preflight import load_plugins
+
+PLUGINS = Path(__file__).resolve().parent / "plugins"
+sys.path.insert(0, str(PLUGINS))          # preflight will not do this for you
+
+result = load_plugins(PLUGINS, allow=["local.weather"])
+print(result)
+
+weather = result.get("weather")           # .get, not [...] -- refusals are data
+if weather is not None:
+    print("\\ntoday:", weather.today())
+'''
+
+_SANDBOX_MANIFEST = {
+    "schema_version": "1.0",
+    "package_id": "local.weather",
+    "core_api_version": "1.0",
+    "visibility": "public",
+    "release_ring": "stable",
+    "entrypoint": "weather.plugin:create_plugin",
+    "plugin": {
+        "schema_version": "1.0",
+        "plugin_id": "weather",
+        "name": "Weather",
+        "module_version": "1.0.0",
+        "tools": [{"name": "weather.today", "risk": "read"}],
+    },
+}
+
+
+def _try(args: argparse.Namespace) -> int:
+    """Write a working host and one plugin, so there is something to break.
+
+    ``create`` will not do this. It writes a manifest for code you wrote and
+    refuses to invent the code, because a manifest records what *you* permit and
+    preflight guessing at that would defeat the point. This command is not that:
+    it is a sandbox to take apart, and it says so in what it prints.
+    """
+    root = Path(args.path).resolve()
+    if root.exists() and any(root.iterdir()) and not args.force:
+        print(
+            f"preflight: '{root}' already exists and is not empty. Pass --force to\n"
+            f"write into it anyway, or name a folder that does not exist yet.",
+            file=sys.stderr,
+        )
+        return 2
+
+    package = root / "plugins" / "weather"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "plugin.py").write_text(_SANDBOX_PLUGIN, encoding="utf-8")
+    (package / MANIFEST_NAME).write_text(
+        json.dumps(_SANDBOX_MANIFEST, indent=2) + "\n", encoding="utf-8"
+    )
+    (root / "host.py").write_text(_SANDBOX_HOST, encoding="utf-8")
+
+    print(f"wrote {root}")
+    print("      host.py                          the gate, 12 lines")
+    print("      plugins/weather/__init__.py      empty, and load-bearing")
+    print("      plugins/weather/plugin.py        the plugin")
+    print(f"      {f'plugins/weather/{MANIFEST_NAME}':<33}what it is permitted to do")
+    print()
+    print("  This one loads. Nothing is wrong with it, which is the least")
+    print("  interesting state it can be in.")
+    print()
+    print("  Run it:")
+    print(f"      cd {root}")
+    print("      python host.py")
+    print()
+    print("  Then break it, and read the refusal before you read the fix:")
+    print("    - delete plugins/weather/__init__.py")
+    print("    - misspell the entrypoint in manifest.json ('wether')")
+    print("    - bump module_version in plugin.py only, not in manifest.json")
+    print()
+    print("  The first two are refused from the manifest alone -- the plugin's")
+    print("  code never runs. The third is caught after importing it, and the")
+    print("  report tells you which of the two happened.")
+    return 0
+
+
 def _example_plugins() -> Path | None:
     """The bundled example packages, wherever this copy of preflight was installed from.
 
@@ -332,6 +441,28 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--package-id", help="dotted package id, e.g. acme.weather")
     create.add_argument("--force", action="store_true", help="overwrite an existing manifest")
     create.set_defaults(handler=_create)
+
+    sandbox = commands.add_parser(
+        "try",
+        help="write a working host and plugin you can break on purpose",
+        description=(
+            "Writes a folder containing a 12-line host, one plugin that loads, "
+            "and its manifest. Unlike `create`, this invents the code as well as "
+            "the paperwork -- it is a sandbox, not a starting point for something "
+            "you intend to ship. Break the files it writes and rerun the host: "
+            "the refusals are the part worth reading."
+        ),
+    )
+    sandbox.add_argument(
+        "path",
+        nargs="?",
+        default="preflight-sandbox",
+        help="folder to write into (default: preflight-sandbox)",
+    )
+    sandbox.add_argument(
+        "--force", action="store_true", help="write into a folder that is not empty"
+    )
+    sandbox.set_defaults(handler=_try)
 
     demo = commands.add_parser(
         "demo",
