@@ -417,12 +417,19 @@ the two strings character by character.</td></tr>
 <tr><td><code>invalid plugin manifest '&lt;path&gt;': &lt;parse error&gt;</code></td>
 <td>The file is not valid JSON. The rest of the message is Python's own parse error
 with a line and column. Usually a trailing comma or a single quote.</td></tr>
-<tr><td><code>invalid plugin manifest '&lt;path&gt;': &lt;n&gt; validation errors for PluginPackageManifest</code></td>
-<td>Valid JSON, wrong shape. <code>Field required</code> means you left something
-out; <code>Extra inputs are not permitted</code> means you misspelled a field name
-or invented one. The schema is closed on purpose: an unrecognised field is a
-refusal, not a shrug, because silently ignoring part of a permission document is
-how permission documents become fiction.</td></tr>
+<tr><td><code>invalid plugin manifest '&lt;path&gt;':</code><br><code>2 problems with this manifest:</code><br><code>&nbsp;&nbsp;visibility&nbsp;&nbsp;&nbsp;&nbsp;Field required</code><br><code>&nbsp;&nbsp;release_ring&nbsp;&nbsp;Field required</code></td>
+<td>Valid JSON, wrong shape. One line per bad field, capped at six with the
+remainder counted. <code>Field required</code> means you left something out;
+<code>Extra inputs are not permitted</code> means you misspelled a field name or
+invented one. The schema is closed on purpose: an unrecognised field is a refusal,
+not a shrug, because silently ignoring part of a permission document is how
+permission documents become fiction.</td></tr>
+<tr><td><code>invalid plugin manifest '&lt;path&gt;': This is a manifest.json, but not one of preflight's. It has none of the fields preflight requires (package_id, visibility, release_ring, entrypoint, plugin), and &lt;n&gt; that preflight does not recognise.</code></td>
+<td>The folder holds somebody else's <code>manifest.json</code> — a browser
+extension, a Figma plugin, a web app. Nothing is wrong with the file and preflight
+is not calling it broken. Either that folder is not a preflight package, or you have
+yet to write one; see <a href="#6-adopting-a-package-you-did-not-write">6</a>, and
+read the warning there about <code>--force</code> before you overwrite theirs.</td></tr>
 <tr><td><code>plugin manifest '&lt;path&gt;' exceeds &lt;n&gt; bytes</code></td>
 <td>Over 256 KiB by default. Refused before it is parsed. Raise it with
 <code>Policy(max_manifest_bytes=...)</code> if you genuinely need to.</td></tr>
@@ -431,12 +438,29 @@ how permission documents become fiction.</td></tr>
 <tr><td><code>cannot read plugin manifest '&lt;path&gt;': ...</code></td>
 <td>Permissions, or the file vanished between discovery and reading.</td></tr>
 <tr><td><code>entrypoint module '&lt;name&gt;' has no file on disk, so it cannot be shown to live inside the trusted plugin root '&lt;root&gt;'</code></td>
-<td>The most common first-timer refusal, and it has three causes.
-<b>(a)</b> No <code>__init__.py</code> in the plugin folder — add an empty one.
-<b>(b)</b> The folder name does not match the entrypoint: a folder called
-<code>hello_greeter</code> cannot satisfy <code>greeter.plugin:create_plugin</code>.
-<b>(c)</b> The module genuinely is not there — check spelling.
-The message names the module it could not find, which tells you which.</td></tr>
+<td>The most common first-timer refusal, and it has four causes. You do not have to
+work out which is yours: preflight looks at the folder and prints a second line
+naming it. The four are listed separately below.</td></tr>
+<tr><td><code>that folder is on disk but has no __init__.py, so Python treats it as a namespace package and it resolves to no single file. Create an empty '&lt;path&gt;'.</code></td>
+<td>Do exactly that. An empty file is enough — it is what makes Python treat the
+folder as a package rather than a loose directory that happens to hold
+<code>.py</code> files.</td></tr>
+<tr><td><code>no '&lt;name&gt;\__init__.py' and no '&lt;name&gt;.py' inside that root. Check the entrypoint in manifest.json against the names on disk.</code></td>
+<td>A typo, or a folder that was renamed after the manifest was written. A folder
+called <code>hello_greeter</code> cannot satisfy
+<code>greeter.plugin:create_plugin</code>; the two names are one string in two
+places and both have to agree. (The separator is your platform's — <code>/</code>
+on macOS and Linux.)</td></tr>
+<tr><td><code>the file is there, but '&lt;root&gt;' is not on sys.path, so the import system cannot see it. preflight never modifies sys.path for you -- add sys.path.insert(0, '&lt;root&gt;') before loading.</code></td>
+<td>Nothing is wrong with the package. Paste the line it gives you.
+<code>load_plugins</code> catches this earlier and more loudly (see 7.1); you only
+reach it here by driving <code>PluginRegistry</code> yourself.</td></tr>
+<tr><td><code>the file is there and that root is on sys.path, so something earlier on sys.path is answering to '&lt;name&gt;' first. Rename the plugin folder to a name no installed package already uses.</code></td>
+<td>Your plugin folder is named after something already importable — a stdlib module
+(<code>time</code>, <code>json</code>, <code>types</code>) or an installed package.
+Your paperwork is fine and no amount of fixing it will help; the name is taken
+before the trusted root is ever consulted. Rename the folder and the
+<code>entrypoint</code> together.</td></tr>
 <tr><td><code>entrypoint module '&lt;name&gt;' resolves to '&lt;path&gt;', which is outside the trusted plugin root '&lt;root&gt;'</code></td>
 <td>The entrypoint points at something real but out of bounds — a standard library
 module, or an installed package. This is the check the whole project exists for. It
@@ -475,8 +499,12 @@ names a function that is not there; anything else is a bug inside the plugin.</t
 <td>The entrypoint returned an object with no <code>manifest</code> attribute. If
 your factory returns an instance, check that <code>__init__</code> actually sets
 <code>self.manifest</code>.</td></tr>
-<tr><td><code>runtime manifest for '&lt;id&gt;' is invalid: &lt;details&gt;</code></td>
-<td>The object's <code>manifest</code> is not a valid <code>PluginManifest</code>.</td></tr>
+<tr><td><code>runtime manifest for '&lt;id&gt;' is invalid:</code><br><code>1 problem with this manifest:</code><br><code>&nbsp;&nbsp;plugin_id&nbsp;&nbsp;Field required</code></td>
+<td>The object's <code>manifest</code> is not a valid <code>PluginManifest</code>.
+Same field-by-field list as a bad <code>manifest.json</code>, about the object your
+own code returned rather than about a file. Note what is <em>not</em> said here: a
+runtime manifest is never reported as belonging to another system, because there is
+no file for it to belong to.</td></tr>
 <tr><td><code>runtime manifest for '&lt;id&gt;' does not match its validated package manifest</code></td>
 <td>The <code>plugin</code> block in <code>manifest.json</code> and the one in the
 running object are not equal. Nearly always drift — someone bumped
