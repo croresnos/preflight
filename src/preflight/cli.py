@@ -222,6 +222,14 @@ def create_plugin():
 
 _SANDBOX_HOST = '''\
 import sys
+
+# You are meant to edit these plugins and rerun this within seconds, and Python
+# decides a cached .pyc is still current from the source's size and its mtime *to
+# the second*. Undoing one of the breaks rewrites the same number of bytes inside
+# that same second, so a normal run would reuse the stale bytecode and refuse a
+# file that is already correct on disk. Your real host should not carry this line.
+sys.dont_write_bytecode = True
+
 from pathlib import Path
 
 from preflight import load_plugins
