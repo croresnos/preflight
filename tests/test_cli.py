@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -436,6 +437,32 @@ def test_try_prints_break_commands_that_would_actually_bite(tmp_path, capsys):
     assert out.count("python host.py") == 4  # one to run it, one per break
     expected = "Remove-Item" if os.name == "nt" else "rm "
     assert expected in out
+
+
+def test_try_sandbox_survives_a_break_and_its_undo(tmp_path, capsys):
+    # The third break edits plugin.py and the undo edits it back to the same
+    # number of bytes, inside the same second. Python validates a cached .pyc on
+    # source size and mtime-to-the-second, so without dont_write_bytecode the
+    # undone sandbox reruns stale bytecode and refuses a file that is correct on
+    # disk -- the walkthrough's last step contradicting itself.
+    root = tmp_path / "sandbox"
+    assert main(["try", str(root)]) == 0
+    capsys.readouterr()
+
+    host = root / "host.py"
+    plugin = root / "plugins" / "weather" / "plugin.py"
+    run = lambda: subprocess.run(  # noqa: E731
+        [sys.executable, str(host)], capture_output=True, text=True, cwd=str(root)
+    ).stdout
+
+    assert "1 loaded, 0 refused" in run()
+
+    original = plugin.read_text(encoding="utf-8")
+    plugin.write_text(original.replace('"1.0.0"', '"2.0.0"'), encoding="utf-8")
+    assert "imported, then rejected" in run()
+
+    plugin.write_text(original, encoding="utf-8")
+    assert "1 loaded, 0 refused" in run()
 
 
 def test_try_refuses_a_folder_that_is_not_empty(tmp_path, capsys):
