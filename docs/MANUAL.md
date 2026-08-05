@@ -22,6 +22,7 @@ your own output prints the real directory.
 10. [The manifest format](#10-the-manifest-format)
 11. [Worked examples](#11-worked-examples)
 12. [Saving your settings](#12-saving-your-settings)
+13. [preflight inside an agent](#13-preflight-inside-an-agent)
 
 ---
 
@@ -1232,3 +1233,139 @@ the file and the problem, not a stack trace.
 
 preflight refuses a settings file it cannot fully understand rather than ignoring
 the parts it does not recognise — the same rule it applies to a manifest.
+
+---
+
+## 13. preflight inside an agent
+
+Section 12 ends on a warning it is worth turning around and answering properly.
+Settings configure the commands you type; they do not configure a running host. So
+if preflight is the gate at your agent's startup, **how do you change its rules?**
+
+The short answer: your agent reads its own configuration and builds a `Policy` from
+it. preflight does not read a file for you, and this section is about why that is
+the right division of labour rather than a missing feature.
+
+### 13.1 The whole arc, once
+
+Start to finish, the first time:
+
+```
+pip install preflight
+
+preflight try sandbox           # 1. a working host and plugin, to break on purpose
+cd sandbox && python host.py
+
+preflight check ./downloaded    # 2. read a package you did not write
+preflight create ./downloaded   # 3. write down what you permit it to do
+
+preflight settings refuse financial,write     # 4. save the rule you keep retyping
+preflight settings --as-python                # 5. the line to paste into your host
+```
+
+Steps 1–3 are the terminal. Step 5 is the door between the terminal and your
+program, and everything after it happens inside your agent, at every startup,
+whether or not anyone is watching.
+
+### 13.2 The gate at startup
+
+```python
+import sys
+from pathlib import Path
+
+from preflight import Policy, ToolRisk, load_plugins
+
+PLUGINS = Path(__file__).resolve().parent / "plugins"
+sys.path.insert(0, str(PLUGINS))        # preflight will not do this for you
+
+result = load_plugins(
+    PLUGINS,
+    allow=["acme.weather", "acme.calendar"],
+    policy=Policy(refuse_tool_risks={ToolRisk.FINANCIAL, ToolRisk.WRITE}),
+)
+
+for outcome in result.refused:
+    log.warning("plugin refused: %s -- %s", outcome.folder, outcome.reason)
+
+tools = [tool for plugin in result.plugins.values() for tool in plugin.manifest.tools]
+```
+
+Two things an agent should do with the result and often does not.
+
+**Read `allow` as the real gate.** Discovery is a convenience for a loop you would
+otherwise write yourself. A package sitting in the folder and missing from `allow`
+is never imported, and that is the guarantee — not the absence of a scan.
+
+**Log `outcome.code_ran`.** `outcome.stage` says `never imported` or `imported,
+then rejected`, and the difference is the entire point of the library. An agent
+that logs "plugin refused" without it has thrown away the only fact worth having:
+whether the refusal cost the plugin nothing, or arrived after its code had already
+run.
+
+### 13.3 Changing the rules without editing code
+
+A real deployment wants the policy to vary — stricter in production, looser on a
+developer's laptop. Do that by reading **your own** configuration and constructing
+the `Policy` yourself:
+
+```python
+import os
+
+from preflight import Policy, ToolRisk, load_plugins
+
+REFUSE = {
+    "strict":  {ToolRisk.FINANCIAL, ToolRisk.WRITE, ToolRisk.DESTRUCTIVE},
+    "normal":  {ToolRisk.FINANCIAL, ToolRisk.DESTRUCTIVE},
+    "dev":     set(),
+}
+
+profile = os.environ.get("AGENT_PLUGIN_POLICY", "strict")   # default is strictest
+result = load_plugins(
+    PLUGINS,
+    allow=ALLOWED,
+    policy=Policy(refuse_tool_risks=REFUSE[profile]),
+)
+```
+
+preflight has no opinion about where that value comes from. An environment
+variable, your agent's existing config file, a secrets manager, a database — all
+fine. **What matters is one property, and it is the same property section 12.3 is
+built around:**
+
+> Whatever your host reads its policy from must be somewhere the plugins it is
+> judging cannot write.
+
+An environment variable set by your deploy system qualifies. Your application's own
+config file, sitting outside the plugin directory, qualifies. A file *inside*
+`plugins/`, or anywhere a plugin can reach at runtime, does not — and that is the
+one arrangement preflight refuses to make convenient for you, because a gate whose
+rules live on the wrong side of the boundary is not a gate.
+
+Note the default in that snippet. If the environment variable is missing or the
+lookup fails, the code above lands on `strict`, not `dev`. Fail closed; a
+misconfiguration should not silently widen what may load.
+
+### 13.4 Keeping the two in step
+
+The command line and the host are now two statements of one rule, and they can
+drift. Two habits keep them honest:
+
+```
+preflight settings --as-python        # regenerate the Policy line, paste, diff it
+preflight check ./plugins/* --profile production
+```
+
+Give the profile the name of the deployment it mirrors, so `--profile production`
+and your production `Policy` are visibly the same rule asked in two places. And put
+`preflight check --refuse …` in CI: it exits `1` on a package your host would turn
+away, which catches a plugin that would have been refused at startup — at review
+time instead, where somebody is looking.
+
+### 13.5 What this does not give you
+
+Worth restating here, because an agent is exactly the context where it gets
+forgotten. Once a plugin is imported it is ordinary Python with the full run of
+your process. preflight has no power after the import: it is not a sandbox, it does
+not read plugin code, and it cannot tell you whether a package does what its
+manifest claims. What it gives you is the ability to say no *before* the import —
+and, in `outcome.code_ran`, an honest record of whether it managed to.
