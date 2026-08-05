@@ -1,11 +1,12 @@
 """``preflight`` on the command line.
 
-Four commands, and the important one is the first::
+Five commands, and the important one is the first::
 
     preflight check  ./some-plugin     # read its paperwork. Executes nothing.
     preflight create ./some-plugin     # write down what you will permit it to do
     preflight demo                     # watch three plugins get refused
     preflight try                      # a host and a plugin, to break yourself
+    preflight settings                 # stop retyping --refuse on every command
 
 ``check`` is the command you run on something you downloaded and have not read.
 It is safe to point at untrusted code because it never imports it -- see
@@ -17,6 +18,10 @@ tells you what the package **claims**, and whether those claims are coherent.
 to do. It is ``Policy(refuse_tool_risks=...)`` -- the gate that runs inside a
 host at every startup -- asked at a terminal, so the exit code answers to the
 host's rules rather than to preflight's defaults.
+
+``settings`` saves that flag so it need not be retyped. It configures the
+commands in this module and nothing else: :func:`~preflight.load.load_plugins`
+does not read a settings file, and this is the only module that does.
 """
 
 from __future__ import annotations
@@ -29,8 +34,26 @@ import sys
 from pathlib import Path
 
 from preflight import __version__
-from preflight.inspect import MANIFEST_NAME, format_inspection, inspect_directory
-from preflight.manifest import ToolRisk
+from preflight.inspect import (
+    MANIFEST_NAME,
+    format_inspection,
+    inspect_directory,
+    risk_set_literal,
+)
+from preflight.manifest import Platform, ToolRisk
+from preflight.registry import Edition, PluginRegistry
+from preflight.settings import (
+    SETTINGS_NAME,
+    Origin,
+    Settings,
+    SettingsError,
+    find_project_settings,
+    load_settings,
+    parse_risks,
+    save_setting,
+    settings_path_for,
+    user_settings_path,
+)
 
 _NOT_IDENTIFIER = re.compile(r"[^0-9a-zA-Z_]+")
 
@@ -57,9 +80,57 @@ def _tool_risks(value: str) -> frozenset[ToolRisk]:
     return frozenset(risks)
 
 
-def _refused_risks(args: argparse.Namespace) -> frozenset[ToolRisk]:
-    """Every risk named across all occurrences of ``--refuse``."""
-    return frozenset().union(*(getattr(args, "refuse", None) or [frozenset()]))
+def _flag_risks(args: argparse.Namespace) -> frozenset[ToolRisk] | None:
+    """Every risk named across all occurrences of ``--refuse``, or ``None``.
+
+    ``None`` and ``frozenset()`` are different answers. The first means the flag
+    was never passed, so a saved setting still applies; the second cannot arise,
+    because ``_tool_risks`` rejects an empty value.
+    """
+    given = getattr(args, "refuse", None)
+    return frozenset().union(*given) if given else None
+
+
+def _refused_risks(args: argparse.Namespace, settings: Settings) -> frozenset[ToolRisk]:
+    """The risks in force: the flag if one was given, otherwise the file's.
+
+    A flag *replaces* the saved value rather than adding to it. Someone reaching
+    for ``--refuse`` at a prompt is usually trying to get out of what the file
+    says, and an override that can only ever narrow is not an override. Repeated
+    flags still union with each other -- that part is unchanged.
+    """
+    from_flag = _flag_risks(args)
+    return from_flag if from_flag is not None else settings.refuse
+
+
+def _settings_for(args: argparse.Namespace, *, inspected: Path | None = None) -> Settings:
+    """Load saved settings for a command that consults them.
+
+    ``inspected`` is the folder the command is about to read, and is passed so
+    :func:`~preflight.settings.load_settings` can drop -- loudly -- a settings
+    file sitting inside it.
+    """
+    resolved = load_settings(profile=getattr(args, "profile", None), inspected=inspected)
+    for item in resolved.ignored:
+        print(
+            f"preflight: ignoring {item.path}\n"
+            f"           {item.reason}, so it is in the hands of whatever put it "
+            f"there.\n           preflight is not configured by the thing it is "
+            f"inspecting. Move it to\n           your project root to have it apply.",
+            file=sys.stderr,
+        )
+    return resolved
+
+
+def _add_profile_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--profile",
+        metavar="NAME",
+        help=(
+            "use a named profile from your settings file -- one saved set of "
+            "rules per agent. See `preflight settings`."
+        ),
+    )
 
 
 def _add_refuse_flag(parser: argparse.ArgumentParser) -> None:
@@ -69,9 +140,11 @@ def _add_refuse_flag(parser: argparse.ArgumentParser) -> None:
         type=_tool_risks,
         action="append",
         help=(
-            "declared tool risks you will not accept. Repeatable. This is your "
-            "rule, not preflight's -- the same one a host writes as "
-            "Policy(refuse_tool_risks=...). Valid: "
+            "declared tool risks you will not accept. Repeatable, and repeats "
+            "combine. This is your rule, not preflight's -- the same one a host "
+            "writes as Policy(refuse_tool_risks=...). Passing this REPLACES any "
+            "saved setting rather than adding to it, so it can loosen as well as "
+            "tighten. Valid: "
             + ", ".join(risk.value for risk in ToolRisk)
         ),
     )
@@ -116,7 +189,7 @@ def _check(args: argparse.Namespace) -> int:
         print(_not_a_directory(target, "check"), file=sys.stderr)
         return 2
 
-    refuse = _refused_risks(args)
+    refuse = _refused_risks(args, _settings_for(args, inspected=target))
     inspections = inspect_directory(target)
     for index, inspection in enumerate(inspections):
         if index:
@@ -382,7 +455,10 @@ def _demo(args: argparse.Namespace) -> int:
 
     from preflight.load import Policy, load_plugins
 
-    refuse = _refused_risks(args)
+    # The bundled examples are preflight's own, so there is no inspected folder
+    # to guard against here -- but the settings still apply, because `demo` is a
+    # command a person types and this is their standing rule.
+    refuse = _refused_risks(args, _settings_for(args))
 
     # The demo has to play the host, and a host puts its plugin folder on
     # sys.path -- but it puts it back. This function is reachable as
@@ -434,6 +510,175 @@ def _demo(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Printed on every settings screen, without exception.
+#:
+#: A settings command makes preflight *look* like a scanner you configure and
+#: point at downloads. It is a gate that lives inside your host. Without these
+#: two lines the feature teaches the wrong model, and someone ships an
+#: application believing a JSON file is guarding it.
+_SCOPE_NOTE = (
+    "  This applies to the preflight commands you type. It does not apply to a\n"
+    "  running host -- see 'preflight settings --as-python'."
+)
+
+
+def _describe(settings: Settings) -> str:
+    """The effective settings and where each one came from.
+
+    Modelled on ``git config --list --show-origin``. A value with no source
+    cannot answer the only question anyone actually has, which is why this is
+    refusing something.
+    """
+    rows = [
+        ("refuse", ", ".join(sorted(risk.value for risk in settings.refuse)) or "(nothing)"),
+        ("edition", settings.edition.value),
+        ("platform", settings.platform.value if settings.platform else _running_platform()),
+        ("max_manifest_bytes", str(settings.max_manifest_bytes)),
+    ]
+    # ASCII only -- see the note in preflight.load.LoadReport.text.
+    lines = ["preflight | settings", ""]
+    name_width = max(len(name) for name, _ in rows)
+    value_width = max(len(value) for _, value in rows)
+    for name, value in rows:
+        origin = settings.origins.get(name, Origin("default"))
+        where = origin.scope
+        if origin.path is not None:
+            where = f"{where:<8} {origin.path}"
+        elif origin.note:
+            where = f"{where:<8} ({origin.note})"
+        lines.append(f"  {name:<{name_width}}  {value:<{value_width}}  {where}".rstrip())
+
+    lines.append("")
+    if settings.profiles:
+        lines.append(f"  profiles  {', '.join(settings.profiles)}")
+        lines.append("  use one with: preflight check <path> --profile <name>")
+    else:
+        lines.append("  no profiles defined")
+    lines += ["", _SCOPE_NOTE]
+    return "\n".join(lines)
+
+
+def _running_platform() -> str:
+    """The platform string a default policy would resolve to, for display only."""
+    if sys.platform == "win32":
+        return Platform.WINDOWS.value
+    if sys.platform == "darwin":
+        return Platform.MACOS.value
+    return Platform.LINUX.value
+
+
+def _as_python(settings: Settings) -> str:
+    """The ``Policy`` line to paste into a host, and the reason it is a paste.
+
+    This is the bridge and the point of the whole command. A terminal experiment
+    becomes a production gate by an explicit human act, in the host's own source
+    where it can be reviewed -- rather than by a file preflight reads behind
+    everyone's back.
+    """
+    parts = []
+    if settings.refuse:
+        parts.append(f"refuse_tool_risks={risk_set_literal(settings.refuse)}")
+    if settings.edition is not Edition.PUBLIC:
+        parts.append(f"edition=Edition.{settings.edition.name}")
+    if settings.platform is not None:
+        parts.append(f"platform=Platform.{settings.platform.name}")
+    if settings.max_manifest_bytes != PluginRegistry.MAX_MANIFEST_BYTES:
+        parts.append(f"max_manifest_bytes={settings.max_manifest_bytes}")
+
+    imports = ["load_plugins"]
+    if parts:
+        imports.append("Policy")
+    if settings.refuse:
+        imports.append("ToolRisk")
+    if settings.edition is not Edition.PUBLIC:
+        imports.append("Edition")
+    if settings.platform is not None:
+        imports.append("Platform")
+
+    policy = f"Policy({', '.join(parts)})" if parts else None
+    lines = [
+        f"from preflight import {', '.join(sorted(imports))}",
+        "",
+        "result = load_plugins(",
+        '    "plugins",',
+        '    allow=["acme.weather"],       # required, and there is no wildcard',
+    ]
+    if policy is not None:
+        lines.append(f"    policy={policy},")
+    lines.append(")")
+
+    if policy is None:
+        lines += [
+            "",
+            "# Your settings are all at their defaults, which are the strictest",
+            "# values available, so no Policy is needed. Passing none at all is the",
+            "# safest thing you can do.",
+        ]
+    return "\n".join(lines)
+
+
+def _settings(args: argparse.Namespace) -> int:
+    """Show, locate, or change the preferences the command line remembers."""
+    scope = "user" if args.user else "project"
+
+    if args.where:
+        user = user_settings_path()
+        project = find_project_settings()
+        print("preflight | settings files")
+        print()
+        print(f"  user     {user}")
+        print(f"           {'exists' if user.is_file() else 'not created yet'}")
+        print()
+        if project is not None:
+            print(f"  project  {project}")
+            print("           exists")
+        else:
+            print(f"  project  {settings_path_for('project')}")
+            print(f"           not created yet -- no {SETTINGS_NAME} here or above")
+        print()
+        print(_SCOPE_NOTE)
+        return 0
+
+    if args.field is not None:
+        # Only `refuse` is settable from the command line today. The file format
+        # carries the other Policy fields and load_settings reads them, but a
+        # flag for each would be surface nobody has asked for.
+        if args.clear:
+            value = None
+        elif args.value is None:
+            print(
+                f"preflight: `settings {args.field}` needs a value, "
+                f"or --clear to remove it.\n"
+                f"    preflight settings refuse financial,write\n"
+                f"    preflight settings refuse --clear",
+                file=sys.stderr,
+            )
+            return 2
+        else:
+            risks = parse_risks(
+                [name.strip() for name in args.value.split(",") if name.strip()],
+                where="--refuse",
+            )
+            value = sorted(risk.value for risk in risks)
+        path = save_setting(
+            args.field, value, scope=scope, profile=args.profile, cwd=None
+        )
+        where = f"profile '{args.profile}' in {path}" if args.profile else str(path)
+        action = "cleared" if value is None else f"set to {', '.join(value) or '(nothing)'}"
+        print(f"{args.field} {action}")
+        print(f"  in {where}")
+        print()
+        print(_SCOPE_NOTE)
+        return 0
+
+    settings = load_settings(profile=args.profile)
+    if args.as_python:
+        print(_as_python(settings))
+        return 0
+    print(_describe(settings))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="preflight",
@@ -476,6 +721,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("path", help="a plugin package, or a folder of them")
     _add_refuse_flag(check)
+    _add_profile_flag(check)
     check.set_defaults(handler=_check)
 
     create = commands.add_parser(
@@ -525,13 +771,78 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_refuse_flag(demo)
+    _add_profile_flag(demo)
     demo.set_defaults(handler=_demo)
+
+    settings = commands.add_parser(
+        "settings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="save the rules you would otherwise retype on every command",
+        description=(
+            "Remembers the --refuse rules you would otherwise retype, per project "
+            "and per agent. With no arguments it prints the effective settings and "
+            "where each one came from."
+        ),
+        epilog=(
+            "This configures the commands you type. It does not configure a running\n"
+            "host: a host states its policy in its own source, where it is\n"
+            "reviewable and nothing on disk can move it. `--as-python` prints the\n"
+            "line to paste there, which is the only way the two are ever connected.\n"
+            "\n"
+            "Settings are read from your working directory and your user config\n"
+            "directory only. A settings file inside a package being inspected is\n"
+            "ignored, because preflight is not configured by the thing it judges."
+        ),
+    )
+    settings.add_argument(
+        "field",
+        nargs="?",
+        choices=["refuse"],
+        help="the setting to change. Omit to show everything.",
+    )
+    settings.add_argument(
+        "value",
+        nargs="?",
+        metavar="RISK[,RISK...]",
+        help="the new value, e.g. financial,write",
+    )
+    settings.add_argument(
+        "--clear", action="store_true", help="remove the setting from this scope"
+    )
+    settings.add_argument(
+        "--user",
+        action="store_true",
+        help="read or write your user-wide file instead of this project's",
+    )
+    settings.add_argument(
+        "--profile",
+        metavar="NAME",
+        help="a named set of rules, one per agent, kept in the same file",
+    )
+    settings.add_argument(
+        "--where",
+        action="store_true",
+        help="print the settings file paths, whether they exist or not",
+    )
+    settings.add_argument(
+        "--as-python",
+        dest="as_python",
+        action="store_true",
+        help="print the Policy(...) call to paste into your host",
+    )
+    settings.set_defaults(handler=_settings)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return int(args.handler(args))
+    try:
+        return int(args.handler(args))
+    except SettingsError as problem:
+        # Exit 2, never 1. On `check`, 1 already means "would be refused", and a
+        # script acting on the answer cannot tell two meanings apart.
+        print(f"preflight: {problem}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
