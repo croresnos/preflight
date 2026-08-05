@@ -59,7 +59,7 @@ The second row is preflight. The first row is the on-ramp to it — a way to rea
 - **Decide the load order,** because the first plugin to claim a tool name keeps it. Precedence follows the order you wrote, not the filesystem's alphabetical glob.
 - **Refuse a plugin whose entrypoint points outside the trusted directory,** resolved with `find_spec`, which locates a module's file without executing it.
 - **Refuse a plugin that declares a risk you do not accept** — `refuse_tool_risks`, checked before the import.
-- **Refuse a plugin that is the wrong tier or the wrong platform** for this build. Optional; see [Release tiers](#release-tiers-optional).
+- **Refuse a plugin that is the wrong tier or the wrong platform** for this build. Optional; see [Release tiers](docs/MANUAL.md#103-release-tiers-optional).
 - **Refuse a plugin whose plugin id or tool names collide** with something already registered.
 - **Catch a plugin that lied,** by comparing what it reports once loaded against the manifest it declared. This is the one check that necessarily happens after the import, because there has to be an object to ask.
 - **Tell you which refusals happened before the plugin ran and which after** — `Outcome.code_ran`, recorded from the import itself rather than inferred from the error.
@@ -134,6 +134,9 @@ Every step above the line reads a file on disk. If any of them refuses, the plug
 ---
 
 ## Quickstart
+
+If you would rather not type the four files below, `preflight try ./sandbox` writes a
+working one and then prints three ways to break it. Read on for what it wrote.
 
 Lay a plugin out like this. The manifest and the Python live together inside one trusted directory:
 
@@ -267,333 +270,58 @@ result = load_plugins(
 )
 ```
 
-`refuse_tool_risks` is the one place preflight acts on a declared risk level, and only because a host asked it to. It is checked before the import, so a package declaring a refused risk never runs. The command line can ask the same question of a package you are considering — [`preflight check --refuse`](#--refuse-which-is-your-rule-and-not-preflights) — but only this line enforces it. See [Release tiers](#release-tiers-optional) for `Policy(edition=...)`, which most hosts never need.
+`refuse_tool_risks` is the one place preflight acts on a declared risk level, and only because a host asked it to. It is checked before the import, so a package declaring a refused risk never runs. The command line can ask the same question of a package you are considering — [`preflight check --refuse`](docs/MANUAL.md#92---refuse-which-is-your-rule-and-not-preflights) — but only this line enforces it. See [Release tiers](docs/MANUAL.md#103-release-tiers-optional) for `Policy(edition=...)`, which most hosts never need.
 
 ---
 
 ## Adopting a package you did not write
 
-Everything above happens inside your program. This section is the other moment — you at a terminal, deciding whether to let something new near the gate at all, and writing down the terms if you do. It is the on-ramp, not the product: nothing here protects a running application, because none of it is running when your application is.
-
-### `preflight check`
-
-`preflight check` reads a package's manifest and lists everything it claims the right to do. **It imports nothing** — not the plugin, not `importlib`, not even `find_spec`. The entrypoint is resolved by path arithmetic against the folder on disk, so there is no code path through this command that can cause the inspected package to execute. `tests/test_inspect.py` proves it with a tripwire, on a package that was genuinely importable at the time.
+Everything above happens inside your program. There is a second moment — you at a
+terminal, deciding whether to let something new near the gate at all, and writing
+down the terms if you do.
 
 ```
-preflight check ./weather
+preflight check ./thing     # read its manifest and every tool it claims
+preflight create ./thing    # write a manifest, when it has none
+preflight demo              # five example plugins, three of them refused
+preflight try ./sandbox     # your own plugin, and three ways to break it
 ```
 
-```
-preflight check | weather\ | nothing was executed
-
-  manifest      valid
-  package id    acme.weather
-  plugin        Weather 2.1.0  (id: weather)
-  tier          public, stable ring
-  entrypoint    weather.plugin:create_plugin
-                -> weather\plugin.py  (inside this folder)
-  permissions   network.outbound
-
-  declares 3 tools
-      weather.today       read         reads data
-    ! weather.subscribe   financial    can spend money
-    ! weather.wipe_cache  destructive  deletes things
-
-  Paperwork is consistent. preflight did not run this code and cannot
-  tell you whether it does what it says.
-```
-
-The `!` marks every tool declaring something beyond a plain read. **These are claims the package makes about itself**, printed so you can decide whether a weather widget has any business being able to spend money. preflight has not read the code and cannot confirm or contradict any of it.
-
-`check` exits `0` when every package would be accepted, `1` when any would be refused, and `2` on a bad path — so it works in a script without anyone reading the output.
-
-#### `--refuse`, which is your rule and not preflight's
-
-By default `check` reports and does not judge: a package declaring a tool that deletes things is *shown to you*, marked `!`, and left for you to decide about. `--refuse` is how you make that decision once and let the exit code carry it:
-
-```
-preflight check ./janitor --refuse destructive
-```
-
-```
-preflight check | janitor\ | nothing was executed
-
-  manifest      valid
-  package id    example.janitor
-  plugin        Janitor 1.0.0  (id: janitor)
-  tier          public, stable ring
-  entrypoint    janitor.plugin:create_plugin
-                -> janitor\plugin.py  (inside this folder)
-
-  declares 1 tool
-    X janitor.purge_cache  destructive  deletes things
-
-  1 tool declares a risk you refused: janitor.purge_cache (destructive)
-  A host running Policy(refuse_tool_risks={ToolRisk.DESTRUCTIVE}) would
-  refuse this package before importing it.
-
-  Paperwork is consistent, and this package would still be refused --
-  by your rule, not by preflight's. Its code would never be imported.
-```
-
-Exit `1`, on a package with nothing wrong with it. That is the intended result: the paperwork is in order and you said no anyway.
-
-The flag takes a comma-separated list and is repeatable (`--refuse destructive,financial` and `--refuse destructive --refuse financial` are the same request). An unrecognised risk name is an error, not a silent no-op. Valid names are the [tool risk levels](#tool-risk-levels).
-
-**Note the line naming `Policy(...)`.** It is there because this command decides nothing that lasts. Run it in a pre-commit hook and it will stop a package entering your repository; it will not stop one loading at runtime, because it is not running then. The same rule enforced by the gate is [`Policy(refuse_tool_risks=...)`](#settings), and that is where it takes effect.
-
-### When there is no manifest
-
-This is the common case for something you just downloaded:
-
-```
-preflight check | random-repo\ | nothing was executed
-
-  no manifest.json found
-
-  This package makes no declarations preflight can check, so preflight
-  can tell you nothing about it. That is not a verdict on the package;
-  it is the absence of one.
-
-  To adopt it anyway, write down what you will permit it to do:
-      preflight create random-repo
-```
-
-`preflight create` writes a manifest skeleton so you can adopt an unmanaged package on your own terms. Be clear about what it does and does not do: it records **what you permit**, and it does not read the package's code to find out what the package wants. The generated `tools` list is empty, which means the package may expose none until you add them yourself.
-
-```
-preflight create ./weather
-preflight check ./weather      # now there is something to check
-```
-
-It refuses to overwrite an existing manifest without `--force`, and it refuses outright when the folder name is not a valid Python identifier — `import weather-tool` is a syntax error, no manifest can fix that, and writing one anyway would produce a file that only looks like progress.
-
-### When the manifest belongs to something else
-
-`manifest.json` is a popular filename. Browser extensions use it, Figma plugins use it, web apps use it, and none of those are preflight's. Pointing `check` at one of them is a reasonable thing to do — it is often the first thing anyone does — so it gets its own answer rather than a schema error:
-
-```
-preflight check | design_linter\ | nothing was executed
-
-  manifest      not preflight's
-
-  This is a manifest.json, but not one of preflight's. It has none of
-  the fields preflight requires (package_id, visibility, release_ring,
-  entrypoint, plugin), and 13 that preflight does not recognise.
-
-  Plenty of systems keep a file by that name, and preflight cannot
-  read theirs -- it would have to guess what any of it permits. A
-  preflight manifest is written by whoever sets the terms for
-  loading: the package's author, when your host requires one, or
-  you, when you adopt something that never heard of preflight.
-
-  Writing yours means taking that filename:
-      preflight create design_linter --force
-
-  That replaces the file above. Move theirs aside first if the
-  tool it belongs to still needs it.
-```
-
-Note what this does **not** say. It does not call the file invalid, because there is nothing wrong with it — a Figma manifest is a correct Figma manifest, and preflight has no standing to grade it. The distinction is drawn on evidence: a file carrying none of the fields preflight requires was written for something else, and a file carrying some of them was written for preflight and has a mistake in it. The second gets the mistake named, field by field:
-
-```
-  manifest      INVALID
-
-  2 problems with this manifest:
-    entrypoint           Field required
-    plugin.tools.0.risk  Input should be 'read', 'write', 'destructive', ...
-```
-
-### `preflight demo`
-
-Loads the five bundled example plugins and refuses three of them, so you can see the refusals rather than read about them:
-
-```
-preflight demo
-```
-
-The output is [below](#worked-examples). Run it again with a rule attached and a fourth plugin is refused:
-
-```
-preflight demo --refuse destructive
-```
-
-```
-  [greeter] top-level plugin code is executing
-  [impostor] top-level plugin code is executing
-
-preflight | plugins\ | 5 packages found
-
-  LOADED   greeter     Greeter 1.0.0 - 1 tool
-  REFUSED  trespasser  never imported
-                       entrypoint module 'json' resolves to '<your-python>/Lib/json/__init__.py',
-                       which is outside the trusted plugin root '.../examples/plugins'
-  REFUSED  collider    never imported
-                       tool name collision: 'greeter.hello' is already owned by 'greeter'
-  REFUSED  impostor    imported, then rejected
-                       runtime manifest for 'example.impostor' does not match its validated package manifest
-  REFUSED  janitor     never imported
-                       package 'example.janitor' declares tool 'janitor.purge_cache' with risk 'destructive', which this host refuses
-
-  1 loaded, 4 refused -- 3 of the 4 stopped before any of their code ran
-```
-
-`janitor` is a plugin with nothing wrong with it, refused for being honest about something you said you did not want — and refused while still inert on disk, so its tripwire never fires. `impostor` is the comparison: it declares two read-only tools and produces a destructive third one only once loaded, so `--refuse` never saw it. It is caught anyway, but afterwards, by comparing what it reported against what it declared.
-
-**preflight enforces declarations. It does not detect concealment.** Those two rows are the shortest statement of that difference the project can make.
-
-### `preflight try`
-
-`demo` is somebody else's plugins failing in ways they chose. `try` gives you your own to break:
-
-```
-preflight try weather-sandbox
-cd weather-sandbox
-python host.py
-```
-
-```
-wrote .../weather-sandbox
-      host.py                          the gate, 12 lines
-      plugins/weather/__init__.py      empty, and load-bearing
-      plugins/weather/plugin.py        the plugin
-      plugins/weather/manifest.json    what it is permitted to do
-
-  This one loads. Nothing is wrong with it, which is the least
-  interesting state it can be in.
-```
-
-```
-preflight | plugins\ | 1 package found
-
-  LOADED   weather  Weather 1.0.0 - 1 tool
-
-  1 loaded, 0 refused
-
-today: 18C and raining
-```
-
-Now break it. Delete `plugins/weather/__init__.py` and rerun the host:
-
-```
-  REFUSED  weather  never imported
-                    entrypoint module 'weather' has no file on disk, so it cannot be shown to live inside the trusted plugin root '.../weather-sandbox/plugins'
-                    that folder is on disk but has no __init__.py, so Python treats it as a namespace package and it resolves to no single file. Create an empty '.../weather-sandbox/plugins/weather/__init__.py'.
-
-  0 loaded, 1 refused -- 1 of the 1 stopped before any of their code ran
-```
-
-Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.json` alone:
-
-```
-  REFUSED  weather  imported, then rejected
-                    runtime manifest for 'local.weather' does not match its validated package manifest
-
-  0 loaded, 1 refused -- 0 of the 1 stopped before any of their code ran
-```
-
-`1 of the 1` against `0 of the 1` is the whole distinction the library is built around, on your own code, in about a minute. The second one's top-level code ran before anything caught it — which is the honest limit of a check that needs an object to interrogate.
-
-This command writes plugin code, which `create` deliberately refuses to do. That is the difference between a sandbox and a real adoption: a manifest records what *you* permit, and preflight guessing at that would defeat the point. Do not build on what `try` writes.
+`check` **imports nothing** — not the plugin, not `importlib`, not even `find_spec`.
+The entrypoint is resolved by path arithmetic against the folder on disk, so there is
+no code path through the command that can cause the inspected package to execute;
+`tests/test_inspect.py` proves it with a tripwire, on a package that was genuinely
+importable at the time. It exits `0` when a package would load, `1` when it would be
+refused, and `2` on a bad path, so it drops into a script without anyone reading the
+output.
+
+`--refuse destructive,financial` decides against *your* rules rather than preflight's.
+It is not a fourth thing preflight knows how to do; it is
+[`Policy(refuse_tool_risks=...)`](#settings) asked at a terminal instead of at startup.
+
+**None of this protects a running application.** Writing a manifest is a decision you
+record; enforcing it is `load_plugins`, in your host, at startup. Every command, every
+message it can print, and what to do about each:
+[Command-line reference](docs/MANUAL.md#9-command-line-reference).
 
 ---
 
 ## The manifest format
 
-One file, fully annotated. This is every field that exists.
+The [Quickstart](#quickstart) above shows a complete manifest — that is all of the
+required fields, in a file that runs.
 
-```jsonc
-{
-  // ---- how the host should treat this package -------------------------
-  "schema_version": "1.0",       // manifest format version; only "1.0" exists
-  "package_id": "example.mail",  // canonical dotted id, unique per install;
-                                 // this is what your allowlist names
-  "core_api_version": "1.0",     // plugin ABI the package targets
-  "visibility": "public",        // who it is FOR:  public | internal | restricted
-  "release_ring": "stable",      // how READY it is: stable | beta | experimental
-  "entrypoint": "mail.plugin:create_plugin",
-                                 // "module:attribute". If the attribute is
-                                 // callable it is called; the result is the plugin.
+**The registry gates on exactly three fields inside `plugin`:** `plugin_id`,
+`supported_platforms`, and `tools`. The rest — `permissions`, `data_classes`,
+`ui_contributions`, `migrations`, `health` — is metadata your *host* reads after a
+successful load. It is in the model so it is validated and type-checked rather than
+passed around as a loose dict.
 
-  // ---- what the plugin says it is -------------------------------------
-  "plugin": {
-    "schema_version": "1.0",
-    "plugin_id": "mail",              // unique among *loaded* plugins; the key
-                                      // you pass to registry.get()
-    "name": "Mail",                   // human-readable
-    "module_version": "1.2.0",        // the plugin's own version
-    "supported_platforms": ["windows", "macos"],
-                                      // empty list = no platform restriction
-    "tools": [
-      {
-        "name": "mail.search",        // globally unique across loaded plugins
-        "risk": "read",               // see below
-        "surface": "backend",         // backend | client
-        "description": "Search the mailbox."
-      }
-    ],
-
-    // ---- declared metadata: carried through, never enforced -----------
-    "permissions": ["mail.read"],     // what the plugin says it needs
-    "data_classes": ["email"],        // what kinds of data it touches
-    "ui_contributions": [],           // surfaces it wants to render into
-    "migrations": [],                 // schema migrations it ships
-    "health": { "state": "unknown" }  // last reported health
-  }
-}
-```
-
-**The registry gates on exactly three fields inside `plugin`:** `plugin_id`, `supported_platforms`, and `tools`. The rest — `permissions`, `data_classes`, `ui_contributions`, `migrations`, `health` — is metadata the *host* reads after a successful load. It is in the model so it is validated and type-checked rather than passed around as a loose dict, and it is documented here so nobody has to wonder why a load-gate carries a health field.
-
-### Tool risk levels
-
-`read` · `write` · `destructive` · `financial` · `credential` · `security` · `public_posting` · `sensitive_disclosure`
-
-A risk level answers "what does the worst case look like if this tool gets called." It exists so a host can require confirmation, apply a policy, or refuse a whole tier of tool without having to guess from the tool's name.
-
-**preflight does not act on it.** Nothing in the registry reads `risk`. It is a declaration you can build a policy on top of, not a policy.
-
-### The plugin ABI
-
-One member. That is the entire interface a plugin object must satisfy:
-
-```python
-@runtime_checkable
-class Plugin(Protocol):
-    @property
-    def manifest(self) -> PluginManifest: ...
-```
-
-`runtime_checkable` makes `isinstance()` work here, but be precise about what that proves: it checks the attribute is *present*, not that it holds a `PluginManifest`. The real check is separate — the registry validates the reported manifest and requires it to equal the declared one.
-
-### Release tiers (optional)
-
-**Skip this if you ship one build.** Nothing above needs it, and the defaults handle the single-tier case.
-
-Some applications ship the same plugin folder to different audiences and need a plugin that is fine internally to stay out of the public build. That is two independent questions, so preflight keeps them as two fields:
-
-| Field | Values | Answers |
-|---|---|---|
-| `visibility` | `public` · `internal` · `restricted` | who the plugin is **for** |
-| `release_ring` | `stable` · `beta` · `experimental` | how **ready** it is |
-
-A build then declares what it accepts, via `Policy(edition=...)`:
-
-| Edition | Accepts visibility | Accepts ring |
-|---|---|---|
-| `public` *(default)* | `public` | `stable` |
-| `internal` | `public`, `internal` | `stable`, `beta` |
-| `development` | all | all — never ship this one |
-
-```python
-from preflight import Edition, Policy, load_plugins
-
-result = load_plugins("plugins", allow=[...], policy=Policy(edition=Edition.INTERNAL))
-```
-
-Both are checked before the import, so a plugin from the wrong tier never runs. One cross-field rule is enforced on the manifest itself: a `restricted` plugin may not label itself `stable`, since `stable` is the ring public builds accept.
-
-If none of this applies to you, mark everything `public` / `stable` and forget the fields exist.
+Every field that exists, annotated, plus the
+[tool risk levels](docs/MANUAL.md#101-tool-risk-levels), the one-member
+[plugin ABI](docs/MANUAL.md#102-the-plugin-abi), and the optional
+[release tiers](docs/MANUAL.md#103-release-tiers-optional) that most hosts never need:
+[The manifest format](docs/MANUAL.md#10-the-manifest-format).
 
 ---
 
@@ -635,66 +363,13 @@ Every row names the test that proves it. If you doubt a row, run that test; if a
 
 Rows 1–14 are the point of the project. Rows 15–17 are what is left over — checks that *cannot* be made before the import, because they are about an object, and there is no object until something has been imported.
 
+`preflight demo` runs five bundled plugins through this table and refuses three of them. Each one prints a tripwire as the first statement of its `__init__.py`, so the plugins that appear in the output are exactly the ones that got as far as being imported — and the ones that do not appear are the rows above the line, working. Plugin by plugin: [Worked examples](docs/MANUAL.md#11-worked-examples).
+
 ### About row 14
 
 A security test that passes both with and without the fix proves nothing. `test_the_confinement_check_is_what_stops_the_out_of_tree_import` runs one scenario twice through the same harness and changes exactly one thing — which importer the registry is handed. The second importer is a copy of what this loader did *before* the confinement check existed, kept in the test file as a control condition.
 
 The interesting result is not that the confined importer refuses the plugin. It is *when* the unconfined one does: it refuses it too, on a later and unrelated ground, having already run the plugin's top-level code. **Raising an exception is not the same as failing closed**, and that test is what tells the two apart.
-
----
-
-## Worked examples
-
-`examples/` contains five plugins. Three of them do not deserve to load.
-
-Every plugin package prints one line as the very first statement in its `__init__.py`. That turns the abstract claim into something you can *see*: the tripwires that appear in the output are exactly the plugins that got as far as being imported.
-
-```
-python examples/host.py        # or: preflight demo
-```
-
-```
-  [greeter] top-level plugin code is executing
-  [impostor] top-level plugin code is executing
-  [janitor] top-level plugin code is executing
-
-preflight | plugins\ | 5 packages found
-
-  LOADED   greeter     Greeter 1.0.0 - 1 tool
-  REFUSED  trespasser  never imported
-                       entrypoint module 'json' resolves to '<your-python>/Lib/json/__init__.py',
-                       which is outside the trusted plugin root '.../examples/plugins'
-  REFUSED  collider    never imported
-                       tool name collision: 'greeter.hello' is already owned by 'greeter'
-  REFUSED  impostor    imported, then rejected
-                       runtime manifest for 'example.impostor' does not match its validated package manifest
-  LOADED   janitor     Janitor 1.0.0 - 1 tool
-
-  2 loaded, 3 refused -- 2 of the 3 stopped before any of their code ran
-
-tool ownership is exclusive
-  greeter.hello -> greeter
-  impostor.read_profile -> None
-
-calling a plugin that loaded
-  Hello, world.
-```
-
-The three tripwires print before the report because they fire during loading, while the report is assembled from what happened. Three plugins printed one; two never got the chance.
-
-*(Only the absolute paths are shortened above — they are wherever you cloned this and whichever Python you ran it with. `tests/test_examples.py` runs this same script in a fresh interpreter and pins every outcome, because a quoted output is a claim.)*
-
-**`greeter`** — valid. Loads, registers its tool, and answers when called.
-
-**`trespasser`** — a directory containing a manifest and *no Python at all*. Its manifest sits inside the trusted root and passes every check that reads the file: canonical `package_id`, well-formed entrypoint, an acceptable visibility and ring. The only thing wrong with it is where its entrypoint points. Shape is not location: a manifest is allowed to *name* any module, and whether that module may be imported is decided separately, by resolving it to a file before the import happens.
-
-**`collider`** — a perfectly good plugin that claims a tool name `greeter` already owns. Nothing is wrong with its code, which is the point: **`[collider]` never appears in the output.** It was refused from its manifest file alone, while still sitting inert on disk.
-
-**`janitor`** — the one nothing is wrong with. Its paperwork is faultless and it declares exactly one tool, honestly, at risk `destructive`. It loads here because `examples/host.py` passes no `Policy` and so accepts every declared risk. Run `preflight demo --refuse destructive` and the same package with the same manifest is refused while still inert on disk, and `[janitor]` disappears from the output. Nothing about the plugin changed; the host's rules did. That is the entire shape of the project in one example — preflight does not decide that deleting things is unacceptable, it enforces your decision that it is.
-
-**`impostor`** — the honest one. Its manifest declares two read-only tools; the object it produces reports a third. Its manifest *file* is faultless, so it clears every pre-import check and gets imported — its tripwire fires. This is the one refusal that necessarily lands after the plugin's code has run, because the check compares the object's self-description to the file's, and there is no object to ask until the import has happened.
-
-Be precise about what that last check is worth. preflight compares two *descriptions* of the plugin. It does not read the plugin's source, analyse its classes, or verify that a tool called `purge_all_records` does anything destructive — that name is a label chosen by whoever wrote the plugin. What the check buys you: a host builds its permission prompts, its tool list, and its UI from `registry.available()`, so without this a plugin could be approved on the strength of one manifest and then hand the host a different one. What it does not buy you: anything about behaviour. A plugin that describes itself accurately and then deletes your database registers without complaint.
 
 ---
 
@@ -773,7 +448,7 @@ No, and this is the most important limitation in this README. `check` reads a pa
 Then `check` will tell you it has nothing to check, which is the honest answer. `preflight create` writes a manifest skeleton so you can adopt the package on your own terms — but note whose judgement that is: the file records what *you* permit, and preflight did not read the code to fill it in.
 
 **What if it has a `manifest.json`, but the file belongs to some other tool?**
-Then `check` says so and names whose it is not, rather than reporting a schema failure against a file that has nothing wrong with it — see [When the manifest belongs to something else](#when-the-manifest-belongs-to-something-else). Adopting the package still means writing preflight's manifest at that filename, which is a real collision and the output says so.
+Then `check` says so and names whose it is not, rather than reporting a schema failure against a file that has nothing wrong with it — see [When the manifest belongs to something else](docs/MANUAL.md#94-when-the-manifest-belongs-to-something-else). Adopting the package still means writing preflight's manifest at that filename, which is a real collision and the output says so.
 
 **Do I have to understand editions, visibility, and release rings?**
 No. They exist for applications that ship one plugin folder to several audiences, they are opt-in through `Policy(edition=...)`, and the defaults handle the single-tier case. Mark your plugins `public` / `stable` and the fields stop mattering.
