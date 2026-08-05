@@ -252,7 +252,9 @@ The middle column of a refusal is the part worth your attention:
 
 ### Settings
 
-Everything is a keyword argument. There is no configuration file, and that is deliberate: a settings file living next to your plugins would be a file a plugin could write, which would turn your policy into something the untrusted side of the boundary controls.
+Everything is a keyword argument. **`Policy` is never loaded from disk, and that is deliberate:** a settings file living next to your plugins would be a file a plugin could write, which would turn your policy into something the untrusted side of the boundary controls.
+
+The command line can remember your preferences — [`preflight settings`](docs/MANUAL.md#12-saving-your-settings) — but that configures the commands *you type*, never a running host, and `preflight settings --as-python` prints the line below for you to paste. A host states its policy here, in its own source, where it is reviewable and diffable. If your host needs to vary that policy per deployment, it reads its own configuration and builds a `Policy` from it — see [preflight inside an agent](docs/MANUAL.md#13-preflight-inside-an-agent).
 
 The defaults are the strictest values available, so a call that passes no `Policy` at all is the safest call you can make:
 
