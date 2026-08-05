@@ -44,8 +44,15 @@ class Policy:
 
     Passing no policy at all is the safest thing you can do; each field below
     only ever appears in a call because a host deliberately widened or narrowed
-    something. There is no configuration file, and that is deliberate -- a
-    settings file inside the plugin folder would be a file a plugin can write.
+    something.
+
+    ``Policy`` is never loaded from disk, and that is deliberate. The command
+    line can remember your preferences for you -- see ``preflight settings`` --
+    but a running host states its policy here, in its own source, where it is
+    reviewable, diffable, and cannot be moved by anything that ships in a plugin
+    folder. ``preflight settings --as-python`` prints the call to paste, so the
+    crossing from one to the other is an explicit human act rather than a file
+    preflight reads behind your back.
     """
 
     #: Which visibility/release-ring tiers this build accepts. Rarely needed.

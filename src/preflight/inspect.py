@@ -175,14 +175,24 @@ def inspect_directory(directory: Path | str) -> tuple[Inspection, ...]:
     return found or (Inspection(folder=target),)
 
 
+def risk_set_literal(risks: Iterable[ToolRisk]) -> str:
+    """Render risks as the Python set literal a host would paste into its source.
+
+    Shared with ``preflight settings --as-python``, which prints a whole
+    ``Policy`` rather than this one field. Both have to spell ``ToolRisk`` the
+    same way, because both are output a person copies verbatim.
+    """
+    members = ", ".join(f"ToolRisk.{risk.name}" for risk in sorted(risks, key=lambda r: r.name))
+    return f"{{{members}}}"
+
+
 def _as_policy_call(risks: Iterable[ToolRisk]) -> str:
     """Render a refused-risk set as the ``Policy`` a host would actually write.
 
     The command line exists to inform a decision that gets enforced somewhere
     else. Printing the enforcing call by name is the shortest way to say so.
     """
-    members = ", ".join(f"ToolRisk.{risk.name}" for risk in sorted(risks, key=lambda r: r.name))
-    return f"Policy(refuse_tool_risks={{{members}}})"
+    return f"Policy(refuse_tool_risks={risk_set_literal(risks)})"
 
 
 def format_inspection(

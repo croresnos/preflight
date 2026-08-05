@@ -21,6 +21,7 @@ your own output prints the real directory.
 9. [Command-line reference](#9-command-line-reference)
 10. [The manifest format](#10-the-manifest-format)
 11. [Worked examples](#11-worked-examples)
+12. [Saving your settings](#12-saving-your-settings)
 
 ---
 
@@ -693,6 +694,8 @@ Exit `1`, on a package with nothing wrong with it. That is the intended result: 
 
 The flag takes a comma-separated list and is repeatable (`--refuse destructive,financial` and `--refuse destructive --refuse financial` are the same request). An unrecognised risk name is an error, not a silent no-op. Valid names are the [tool risk levels](#101-tool-risk-levels).
 
+To stop retyping it on every command, save it: [`preflight settings`](#12-saving-your-settings). A saved rule applies to `check` and `demo` automatically, and passing `--refuse` **replaces** it for that one run rather than adding to it — so the flag can loosen as well as tighten.
+
 **Note the line naming `Policy(...)`.** It is there because this command decides nothing that lasts. Run it in a pre-commit hook and it will stop a package entering your repository; it will not stop one loading at runtime, because it is not running then. The same rule enforced by the gate is [`Policy(refuse_tool_risks=...)`](../README.md#settings), and that is where it takes effect.
 
 ### 9.3 When there is no manifest
@@ -849,6 +852,24 @@ Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.j
 
 This command writes plugin code, which `create` deliberately refuses to do. That is the difference between a sandbox and a real adoption: a manifest records what *you* permit, and preflight guessing at that would defeat the point. Do not build on what `try` writes.
 
+### 9.7 `preflight settings`
+
+Saves the `--refuse` rule so it need not be retyped, per project and per agent.
+
+```
+preflight settings                    # what is in force, and where each value came from
+preflight settings --where            # the file paths, whether they exist or not
+preflight settings refuse financial,write
+preflight settings refuse --clear
+preflight settings --user refuse financial
+preflight settings --profile research-agent refuse financial,write,destructive
+preflight settings --as-python        # the Policy(...) to paste into a host
+```
+
+`check` and `demo` also take `--profile NAME`.
+
+This configures the commands you type and **not** a running host — `load_plugins` reads no file. [Section 12](#12-saving-your-settings) is the full account, including why discovery deliberately never looks inside the package being inspected.
+
 ---
 
 ## 10. The manifest format
@@ -1002,3 +1023,212 @@ The three tripwires print before the report because they fire during loading, wh
 **`impostor`** — the honest one. Its manifest declares two read-only tools; the object it produces reports a third. Its manifest *file* is faultless, so it clears every pre-import check and gets imported — its tripwire fires. This is the one refusal that necessarily lands after the plugin's code has run, because the check compares the object's self-description to the file's, and there is no object to ask until the import has happened.
 
 Be precise about what that last check is worth. preflight compares two *descriptions* of the plugin. It does not read the plugin's source, analyse its classes, or verify that a tool called `purge_all_records` does anything destructive — that name is a label chosen by whoever wrote the plugin. What the check buys you: a host builds its permission prompts, its tool list, and its UI from `registry.available()`, so without this a plugin could be approved on the strength of one manifest and then hand the host a different one. What it does not buy you: anything about behaviour. A plugin that describes itself accurately and then deletes your database registers without complaint.
+
+---
+
+## 12. Saving your settings
+
+Everything in section 4 is a flag you retype. `--refuse financial,write` is the
+rule you have already decided on, typed again on every command, and there is
+nowhere to write down "in this project, I never accept financial tools."
+
+`preflight settings` is that place.
+
+```
+preflight settings refuse financial,write
+```
+
+From then on, `preflight check` and `preflight demo` apply the rule without being
+told. Nothing else changes.
+
+### 12.1 Read this part before you use it
+
+**A settings file configures the commands you type. It does not configure a
+running host.**
+
+That is not a limitation that got left in; it is the reason the feature is allowed
+to exist. `load_plugins` reads no file, ever. A host states its policy in its own
+source, where it is reviewable, diffable, and cannot be moved by anything that
+ships in a plugin folder. If a JSON file could change what your application loads,
+then getting that file rewritten would be the whole attack.
+
+So every settings screen ends with the same two lines, and they mean exactly what
+they say:
+
+```
+  This applies to the preflight commands you type. It does not apply to a
+  running host -- see 'preflight settings --as-python'.
+```
+
+### 12.2 Seeing what is in force, and why
+
+With no arguments, `settings` prints the effective values and where each one came
+from — modelled on `git config --list --show-origin`, because *"why is this
+refusing?"* is the only question anyone actually has.
+
+```
+preflight settings
+```
+
+```
+preflight | settings
+
+  refuse              financial, write  project  <root>\preflight.settings.json
+  edition             public            default
+  platform            windows           default  (the running OS)
+  max_manifest_bytes  262144            default
+
+  profiles  research-agent
+  use one with: preflight check <path> --profile <name>
+
+  This applies to the preflight commands you type. It does not apply to a
+  running host -- see 'preflight settings --as-python'.
+```
+
+`preflight settings --where` prints both file paths whether they exist or not,
+which is what you want when the answer is "it came from a file you forgot about."
+
+### 12.3 Where the files live, and where they deliberately do not
+
+Two places, both owned by you:
+
+| Scope | Location | Set with |
+|---|---|---|
+| project | `preflight.settings.json` in your working directory, or the nearest ancestor of it, stopping at a `.git` boundary | `preflight settings refuse …` |
+| user | `%APPDATA%\preflight\settings.json`, or `$XDG_CONFIG_HOME/preflight/settings.json` | `preflight settings --user refuse …` |
+
+**The search climbs from your working directory and never from the package being
+inspected.** This is the part worth understanding, because the alternative looks
+harmless and is not: if `preflight check ./downloads/weather` consulted files above
+`./downloads/weather`, then anyone who can get you to unpack a folder can ship a
+`preflight.settings.json` beside it saying `"refuse": []` — and the gate would be
+configured by the party it is judging.
+
+There is a second placement, and it is the one worth understanding, because it
+beats the first rule by exactly one directory. Unpacking an archive into
+`downloads/` and inspecting what came out is the ordinary thing to do — and your
+shell is very often sitting in `downloads/` at the time:
+
+```
+downloads/preflight.settings.json     <- "refuse": []   beside, not inside
+downloads/evil/                       <- the package you are checking
+```
+
+That file is not *inside* the package, so the first rule waves it through, and it
+is nearer than your real settings, so yours are never reached. **A settings file
+may therefore only reach down onto a package beneath it from a directory that
+looks deliberately made** — one containing `.git`, `.hg`, `pyproject.toml`, or an
+explicit `.preflight-root`. An unpacked folder carrying a settings file and
+nothing else does not qualify, and is ignored.
+
+**Be exact about what that is worth.** Every one of those markers is a file or a
+folder, and an archive can contain files. A package that ships its own
+`pyproject.toml` beside its own settings file passes the check — at that point
+every file in the tree was chosen by the same party, and no test of the filesystem
+can tell you otherwise. This rule stops the realistic case; it is a filter, not a
+lock. The only anchor that cannot be forged is your **user-scope** file, because it
+lives somewhere nothing is ever unpacked into. `tests/test_settings.py` pins the
+forged-marker case explicitly, so it is a known boundary rather than a surprise.
+
+A settings file found *inside* the directory you are inspecting is ignored and
+says so:
+
+```
+preflight: ignoring <root>\downloads\preflight.settings.json
+           it sits above the folder being inspected, in a directory with no sign
+           of having been set up by hand, so it is in the hands of whatever put it there.
+           preflight is not configured by the thing it is inspecting. Move it to
+           your project root to have it apply.
+```
+
+**Ignoring a file does not abandon the search** — your real project settings still
+apply, from further up. This half matters as much as the first: if a rejected file
+took the project scope down with it, then planting one would erase the rules you
+wrote, and a rule silently downgraded to nothing is as good an outcome for an
+attacker as one they chose. `tests/test_settings.py` proves each rule by reverting
+it and confirming the tests fail without it.
+
+**There is no `allow` key, and writing one is an error rather than a key that gets
+quietly dropped.** The allowlist decides whether a package is imported at all. It
+is required, has no wildcard, and lives in your host's source on purpose — a file
+that could add package ids to it is precisely the attack the paragraph above exists
+to prevent.
+
+### 12.4 One profile per agent
+
+"Per agent" means a named profile, kept in the same file. There is no second format
+and no second discovery path.
+
+```
+preflight settings --profile research-agent refuse financial,write,destructive
+preflight check ./some-plugin --profile research-agent
+```
+
+```json
+{
+  "version": 1,
+  "refuse": ["financial", "write"],
+  "profiles": {
+    "research-agent": {
+      "refuse": ["destructive", "financial", "write"]
+    }
+  }
+}
+```
+
+### 12.5 Precedence
+
+Lowest to highest. Later wins.
+
+| # | Source |
+|---|---|
+| 1 | preflight's defaults (the strictest values available) |
+| 2 | user scope |
+| 3 | project scope |
+| 4 | `--profile NAME` |
+| 5 | `--refuse` on the command line |
+
+**A flag replaces the saved value rather than adding to it.** Someone reaching for
+`--refuse` at a prompt is usually trying to get *out* of what the file says, and an
+override that can only ever tighten is not an override. Repeated `--refuse` flags
+still union with each other — that part is unchanged. `--clear` removes a key
+entirely, so the next layer down is heard again, rather than pinning an empty value
+that would shadow it.
+
+### 12.6 Turning it into a real gate
+
+This is the command the rest of the section is for.
+
+```
+preflight settings --as-python
+```
+
+```python
+from preflight import Policy, ToolRisk, load_plugins
+
+result = load_plugins(
+    "plugins",
+    allow=["acme.weather"],       # required, and there is no wildcard
+    policy=Policy(refuse_tool_risks={ToolRisk.FINANCIAL, ToolRisk.WRITE}),
+)
+```
+
+Paste that into your host and the rule you have been testing at a terminal becomes
+the rule that runs at every startup — by an explicit act you can see in a diff,
+rather than by a file preflight reads behind your back. Fill in your own `allow`
+list; it is the one thing a settings file will not write for you.
+
+If your settings are all at their defaults, this prints no `Policy` at all and says
+why: the defaults are the strictest values available, so passing none is the safest
+thing you can do.
+
+### 12.7 When something is wrong with the file
+
+Every failure exits `2` — "you gave me something I cannot work with" — and never
+`1`, which already means "would be refused" on `check` and must not come to mean
+two things. Malformed JSON, an unknown risk name, an unrecognised key, a version
+this build does not understand, and an unwritable path each get a sentence naming
+the file and the problem, not a stack trace.
+
+preflight refuses a settings file it cannot fully understand rather than ignoring
+the parts it does not recognise — the same rule it applies to a manifest.

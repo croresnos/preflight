@@ -285,6 +285,7 @@ preflight check ./thing     # read its manifest and every tool it claims
 preflight create ./thing    # write a manifest, when it has none
 preflight demo              # five example plugins, three of them refused
 preflight try ./sandbox     # your own plugin, and three ways to break it
+preflight settings          # save the rules, per project and per agent
 ```
 
 `check` **imports nothing** — not the plugin, not `importlib`, not even `find_spec`.
@@ -298,6 +299,9 @@ output.
 `--refuse destructive,financial` decides against *your* rules rather than preflight's.
 It is not a fourth thing preflight knows how to do; it is
 [`Policy(refuse_tool_risks=...)`](#settings) asked at a terminal instead of at startup.
+`preflight settings` saves that rule so it need not be retyped — for these commands
+only, never for a running host, and never from a file inside the package being
+inspected: [Saving your settings](docs/MANUAL.md#12-saving-your-settings).
 
 **None of this protects a running application.** Writing a manifest is a decision you
 record; enforcing it is `load_plugins`, in your host, at startup. Every command, every
