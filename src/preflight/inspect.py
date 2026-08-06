@@ -30,11 +30,13 @@ from typing import Iterable
 from pydantic import ValidationError
 
 from preflight.manifest import (
+    Platform,
     PluginPackageManifest,
     Tool,
     ToolRisk,
     explain_manifest_error,
 )
+from preflight.registry import Edition, host_platform, preload_refusals
 
 MANIFEST_NAME = "manifest.json"
 
@@ -84,11 +86,44 @@ class Inspection:
         makes from ``refuse_tool_risks``, asked of a package that is not being
         loaded. It reads the parsed manifest and nothing else -- a tool the
         package never declared is invisible to it, exactly as it is to the gate.
+
+        Named separately from :meth:`refusals` because the report marks these
+        tools individually, in the list where they are declared. The sentence
+        version of the same fact comes back from ``refusals`` too.
         """
         if self.package is None:
             return ()
         refused = frozenset(ToolRisk(risk) for risk in risks)
         return tuple(tool for tool in self.package.plugin.tools if tool.risk in refused)
+
+    def refusals(
+        self,
+        *,
+        platform: Platform | None = None,
+        edition: Edition = Edition.PUBLIC,
+        refuse_tool_risks: Iterable[ToolRisk | str] = (),
+    ) -> tuple[str, ...]:
+        """Every reason a host with these rules would refuse this package.
+
+        The same function the gate calls -- see
+        :func:`~preflight.registry.preload_refusals`. Calling it rather than
+        re-deriving the answer here is what stops ``check`` and ``load_plugins``
+        from drifting into two opinions, which they had: this command judged the
+        declared risks and nothing else, so a package the gate would turn away
+        for its platform or its release ring passed and exited zero.
+
+        Empty when the manifest did not parse. There is nothing to decide about
+        a package whose declaration could not be read, and the report says so
+        further up.
+        """
+        if self.package is None:
+            return ()
+        return preload_refusals(
+            self.package,
+            platform=platform if platform is not None else host_platform(),
+            edition=edition,
+            refuse_tool_risks=refuse_tool_risks,
+        )
 
 
 def _resolve_on_disk(module_name: str, import_root: Path) -> tuple[Path | None, str]:
@@ -199,16 +234,29 @@ def format_inspection(
     inspection: Inspection,
     *,
     refuse_tool_risks: Iterable[ToolRisk | str] = (),
+    platform: Platform | None = None,
+    edition: Edition = Edition.PUBLIC,
 ) -> str:
     """The inspection, written for a person deciding whether to install this.
 
     ``refuse_tool_risks`` are the risks the reader has said they will not accept.
     Tools declaring one are marked and named, and the verdict at the bottom says
     the package would be refused -- by that rule, not by preflight's.
+
+    ``platform`` and ``edition`` are the rest of what a host decides before it
+    imports anything, and they default to what a host with no ``Policy`` would
+    use: the running OS, and a public build. They are here so this command
+    answers the question the gate would answer, rather than a smaller one.
     """
     refused = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
     refused_tools = inspection.refused_tools(refused)
     refused_names = {tool.name for tool in refused_tools}
+    # Asked with no risks at all, so what comes back is platform and tier alone.
+    # The risk refusals are already shown against the tools that caused them, a
+    # few lines down, and a sentence repeating each one would say it twice.
+    # Subtracting them by matching on their wording would work until someone
+    # reworded them; not asking for them cannot rot.
+    other_refusals = inspection.refusals(platform=platform, edition=edition)
     name = inspection.folder.name
     # ASCII only -- see the note in preflight.load.LoadReport.text.
     lines = [f"preflight check | {name}{os.sep} | nothing was executed", ""]
@@ -312,13 +360,30 @@ def format_inspection(
             "  refuse this package before importing it.",
         ]
 
+    if other_refusals:
+        count = len(other_refusals)
+        lines += [
+            "",
+            f"  {count} reason{'' if count == 1 else 's'} a host would refuse this "
+            f"before importing it:",
+            *(f"    X {reason}" for reason in other_refusals),
+        ]
+
     lines.append("")
     if not inspection.consistent:
         lines.append("  This package would be refused. Its code would never be imported.")
-    elif refused_tools:
+    elif refused_tools or other_refusals:
+        # The two are worth distinguishing. A refused risk is the reader's own
+        # rule coming back at them; a platform or a tier is the package being
+        # wrong for this build no matter what the reader thinks about risk.
+        whose = (
+            "by your rule, not by preflight's."
+            if refused_tools and not other_refusals
+            else "by the rules any host applies before importing."
+        )
         lines += [
             "  Paperwork is consistent, and this package would still be refused --",
-            "  by your rule, not by preflight's. Its code would never be imported.",
+            f"  {whose} Its code would never be imported.",
         ]
     else:
         lines += [

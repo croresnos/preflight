@@ -378,6 +378,38 @@ def test_demo_with_a_refused_risk_stops_the_janitor_while_it_is_still_inert(caps
     assert "risk 'destructive', which this host refuses" in out
 
 
+def test_demo_honours_every_saved_setting_and_not_only_refuse(
+    tmp_path, monkeypatch, capsys
+):
+    """A settings file can set four things. `demo` used to act on one of them.
+
+    `preflight settings` prints all four as being in force, with a source
+    against each, and `--as-python` emits all four into the line a person pastes
+    into their host. A command that consulted the file for `refuse` and silently
+    dropped `platform` made that display a claim about a run that never happened.
+
+    `platform` is the one to test with, because the bundled examples declare no
+    `supported_platforms` -- so nothing changes -- while `max_manifest_bytes`
+    does change the outcome and proves the whole policy is being carried, not
+    just the field this test names.
+    """
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")  # a project root
+    (tmp_path / "preflight.settings.json").write_text(
+        json.dumps({"version": 1, "max_manifest_bytes": 10}), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["demo"]) == 0
+    out = capsys.readouterr().out
+
+    # Every example manifest is larger than ten bytes, so a demo that carried the
+    # setting refuses all five before parsing any of them. One that dropped it
+    # loads two, which is what this asserted against until 0.6.0.
+    assert out.count("LOADED") == 0
+    assert "0 loaded, 5 refused" in out
+    assert "exceeds 10 bytes" in out
+
+
 def test_demo_refusing_destructive_does_not_catch_the_plugin_that_lied(capsys):
     # impostor declares two read-only tools and produces a destructive third
     # one after loading. --refuse acts on declarations, so it cannot see that.
