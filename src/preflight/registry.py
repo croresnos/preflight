@@ -84,7 +84,14 @@ _HOST_PLATFORMS = {
 }
 
 
-def _host_platform() -> Platform:
+def host_platform() -> Platform:
+    """The platform a default policy resolves to: the one this process is on.
+
+    Public because three places need the same answer -- the registry's default,
+    ``preflight check``, and the settings display -- and three copies of a
+    ``sys.platform`` mapping is three chances to disagree about what "windows"
+    means.
+    """
     try:
         return _HOST_PLATFORMS[sys.platform]
     except KeyError:
@@ -98,6 +105,61 @@ class RegisteredPlugin:
     package: PluginPackageManifest
     instance: Plugin
     origin: str
+
+
+def preload_refusals(
+    package: PluginPackageManifest,
+    *,
+    platform: Platform,
+    edition: Edition = Edition.PUBLIC,
+    refuse_tool_risks: Iterable[ToolRisk | str] = (),
+) -> tuple[str, ...]:
+    """Every reason this package would be refused before anything is imported.
+
+    Pure, and decided from the manifest alone. Two callers need this answer and
+    they must not be able to disagree: :meth:`PluginRegistry._validate_preload_policy`
+    raises on the first entry, and ``preflight check`` -- which imports nothing at
+    all -- reports every entry so a person can see the whole list at once.
+
+    A single source of truth is the point. ``check`` previously judged only the
+    declared risks, so a package the gate would refuse for its platform or its
+    release ring passed the command and exited zero. The command is recommended
+    for CI precisely to catch that, and it could not.
+
+    The allowlist is deliberately absent. It is a host's decision and there is no
+    host at a terminal, so it stays inline in the registry rather than becoming a
+    parameter that ``check`` would always have to pass nothing for.
+    """
+    refused = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
+    reasons: list[str] = []
+
+    if package.plugin.supported_platforms and platform not in package.plugin.supported_platforms:
+        reasons.append(
+            f"package '{package.package_id}' does not support platform "
+            f"'{platform.value}'"
+        )
+
+    # A declared risk the host has said it will not accept. This is the one place
+    # preflight acts on ToolRisk, and only because a host asked it to.
+    for tool in package.plugin.tools:
+        if tool.risk in refused:
+            reasons.append(
+                f"package '{package.package_id}' declares tool '{tool.name}' with "
+                f"risk '{tool.risk.value}', which this host refuses"
+            )
+
+    policy = _EDITION_POLICY[edition]
+    if package.visibility not in policy.visibilities:
+        reasons.append(
+            f"{edition.value} build cannot load '{package.package_id}' "
+            f"with visibility '{package.visibility.value}'"
+        )
+    if package.release_ring not in policy.rings:
+        reasons.append(
+            f"{edition.value} build cannot load '{package.package_id}' "
+            f"from the '{package.release_ring.value}' release ring"
+        )
+    return tuple(reasons)
 
 
 def _import_chain(module_name: str) -> tuple[str, ...]:
@@ -270,7 +332,7 @@ class PluginRegistry:
         max_manifest_bytes: int | None = None,
     ) -> None:
         self.edition = Edition(edition)
-        self.platform = Platform(platform) if platform is not None else _host_platform()
+        self.platform = Platform(platform) if platform is not None else host_platform()
         self.allowed_package_ids = frozenset(allowed_package_ids)
         self.refuse_tool_risks = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
         self.max_manifest_bytes = (
@@ -428,39 +490,26 @@ class PluginRegistry:
         )
 
     def _validate_preload_policy(self, package: PluginPackageManifest) -> None:
+        # The allowlist stays here rather than in `preload_refusals`. It is a
+        # host's decision, and the other caller of that function is a terminal
+        # command with no host to have made one.
         if package.package_id not in self.allowed_package_ids:
             raise PluginRejected(
                 f"package '{package.package_id}' is not in the explicit build allowlist"
             )
-        if (
-            package.plugin.supported_platforms
-            and self.platform not in package.plugin.supported_platforms
-        ):
-            raise PluginRejected(
-                f"package '{package.package_id}' does not support platform "
-                f"'{self.platform.value}'"
-            )
 
-        # A declared risk the host has said it will not accept. This is the one
-        # place preflight acts on ToolRisk, and only because a host asked it to.
-        for tool in package.plugin.tools:
-            if tool.risk in self.refuse_tool_risks:
-                raise PluginRejected(
-                    f"package '{package.package_id}' declares tool '{tool.name}' with "
-                    f"risk '{tool.risk.value}', which this host refuses"
-                )
-
-        policy = _EDITION_POLICY[self.edition]
-        if package.visibility not in policy.visibilities:
-            raise PluginRejected(
-                f"{self.edition.value} build cannot load '{package.package_id}' "
-                f"with visibility '{package.visibility.value}'"
-            )
-        if package.release_ring not in policy.rings:
-            raise PluginRejected(
-                f"{self.edition.value} build cannot load '{package.package_id}' "
-                f"from the '{package.release_ring.value}' release ring"
-            )
+        # First refusal wins, as it always has: a person fixes one thing at a
+        # time and the registry has no report to put a list in. `preflight check`
+        # calls the same function and shows all of them, because there the reader
+        # is deciding rather than debugging.
+        reasons = preload_refusals(
+            package,
+            platform=self.platform,
+            edition=self.edition,
+            refuse_tool_risks=self.refuse_tool_risks,
+        )
+        if reasons:
+            raise PluginRejected(reasons[0])
 
 
 def public_build(

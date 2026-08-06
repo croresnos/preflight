@@ -40,8 +40,8 @@ from preflight.inspect import (
     inspect_directory,
     risk_set_literal,
 )
-from preflight.manifest import Platform, ToolRisk
-from preflight.registry import Edition, PluginRegistry
+from preflight.manifest import ToolRisk
+from preflight.registry import Edition, PluginRegistry, host_platform
 from preflight.settings import (
     SETTINGS_NAME,
     Origin,
@@ -189,18 +189,37 @@ def _check(args: argparse.Namespace) -> int:
         print(_not_a_directory(target, "check"), file=sys.stderr)
         return 2
 
-    refuse = _refused_risks(args, _settings_for(args, inspected=target))
+    settings = _settings_for(args, inspected=target)
+    refuse = _refused_risks(args, settings)
+    # The rest of what a host decides before importing. Defaulting to the running
+    # OS and a public build is what `load_plugins` with no Policy does, so an
+    # unconfigured `check` answers the same question an unconfigured host would.
+    platform = settings.platform
+    edition = settings.edition
+
     inspections = inspect_directory(target)
     for index, inspection in enumerate(inspections):
         if index:
             print()
-        print(format_inspection(inspection, refuse_tool_risks=refuse))
+        print(
+            format_inspection(
+                inspection,
+                refuse_tool_risks=refuse,
+                platform=platform,
+                edition=edition,
+            )
+        )
 
-    # Both conditions mean the same thing -- this would not load -- so both are
-    # exit 1. Incoherent paperwork and a risk the caller refused are different
-    # reasons for one answer, and a script acting on the answer needs one code.
+    # Every condition means the same thing -- this would not load -- so all of
+    # them are exit 1. Incoherent paperwork, a refused risk, an unsupported
+    # platform and a tier this build will not take are four reasons for one
+    # answer, and a script acting on the answer needs one code.
     would_load = all(
-        item.consistent and not item.refused_tools(refuse) for item in inspections
+        item.consistent
+        and not item.refusals(
+            platform=platform, edition=edition, refuse_tool_risks=refuse
+        )
+        for item in inspections
     )
     return 0 if would_load else 1
 
@@ -453,12 +472,21 @@ def _demo(args: argparse.Namespace) -> int:
         )
         return 2
 
-    from preflight.load import Policy, load_plugins
+    from dataclasses import replace
+
+    from preflight.load import load_plugins
 
     # The bundled examples are preflight's own, so there is no inspected folder
     # to guard against here -- but the settings still apply, because `demo` is a
     # command a person types and this is their standing rule.
-    refuse = _refused_risks(args, _settings_for(args))
+    #
+    # All of the settings, not just `refuse`. A settings file can set edition,
+    # platform and max_manifest_bytes; `preflight settings` prints all four as
+    # being in force and `--as-python` emits all four, so a demo honouring one of
+    # them would be the display telling a lie. The flag still beats the file.
+    settings = _settings_for(args)
+    refuse = _refused_risks(args, settings)
+    policy = replace(settings.as_policy(), refuse_tool_risks=refuse)
 
     # The demo has to play the host, and a host puts its plugin folder on
     # sys.path -- but it puts it back. This function is reachable as
@@ -478,7 +506,7 @@ def _demo(args: argparse.Namespace) -> int:
                 "example.impostor",
                 "example.janitor",
             ],
-            policy=Policy(refuse_tool_risks=refuse),
+            policy=policy,
         )
     finally:
         if sys.path and sys.path[0] == entry:
@@ -532,7 +560,7 @@ def _describe(settings: Settings) -> str:
     rows = [
         ("refuse", ", ".join(sorted(risk.value for risk in settings.refuse)) or "(nothing)"),
         ("edition", settings.edition.value),
-        ("platform", settings.platform.value if settings.platform else _running_platform()),
+        ("platform", (settings.platform or host_platform()).value),
         ("max_manifest_bytes", str(settings.max_manifest_bytes)),
     ]
     # ASCII only -- see the note in preflight.load.LoadReport.text.
@@ -556,15 +584,6 @@ def _describe(settings: Settings) -> str:
         lines.append("  no profiles defined")
     lines += ["", _SCOPE_NOTE]
     return "\n".join(lines)
-
-
-def _running_platform() -> str:
-    """The platform string a default policy would resolve to, for display only."""
-    if sys.platform == "win32":
-        return Platform.WINDOWS.value
-    if sys.platform == "darwin":
-        return Platform.MACOS.value
-    return Platform.LINUX.value
 
 
 def _as_python(settings: Settings) -> str:
