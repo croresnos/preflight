@@ -3,12 +3,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "preflight"
-version = "0.5.0"
+# The distribution is `preflight-gate`; the import name and the command are both
+# still `preflight`. PyPI's `preflight` belongs to an unrelated Django project
+# last released in 2015, so `pip install preflight` installs somebody else's
+# package -- which the docs told people to do until 0.6.0.
+name = "preflight-gate"
+version = "0.6.0"
 description = "Decide whether a plugin may load from its manifest alone, before any of its code runs."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
+authors = [{ name = "Neil Mahure" }]
 keywords = ["plugins", "manifest", "loader", "fail-closed", "agent-tools"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -21,6 +26,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = ["pydantic>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/croresnos/preflight"
+Repository = "https://github.com/croresnos/preflight"
+Issues = "https://github.com/croresnos/preflight/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
