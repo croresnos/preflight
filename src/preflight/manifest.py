@@ -297,6 +297,79 @@ def manifest_error_message(prefix: str, exc: Exception, *, from_file: bool = Tru
     return f"{prefix}:{separator}{detail}"
 
 
+def _by_name(value: object) -> dict[str, object] | None:
+    """A list of named entries indexed by name, or ``None`` if it is not one.
+
+    ``tools`` is the field this exists for. Rendering two whole tool lists to
+    show that one entry differs buries the answer in schema, and truncating them
+    to fit a line cuts off the end -- which is exactly where an appended tool is.
+    """
+    if not isinstance(value, list):
+        return None
+    if not all(
+        isinstance(item, dict) and isinstance(item.get("name"), str) for item in value
+    ):
+        return None
+    return {str(item["name"]): item for item in value}  # type: ignore[index]
+
+
+def _brief(value: object) -> str:
+    """A value short enough to sit on one line of a refusal."""
+    rendered = repr(value)
+    return rendered if len(rendered) <= 60 else rendered[:57] + "..."
+
+
+def _describe_difference(field: str, declared: object, reported: object) -> str:
+    """One field's disagreement, in the fewest words somebody can act on."""
+    declared_entries = _by_name(declared)
+    reported_entries = _by_name(reported)
+    if declared_entries is None or reported_entries is None:
+        return f"{field}: manifest says {_brief(declared)}, plugin reports {_brief(reported)}"
+
+    parts = []
+    if undeclared := sorted(reported_entries.keys() - declared_entries.keys()):
+        parts.append("undeclared in the manifest: " + ", ".join(undeclared))
+    if unreported := sorted(declared_entries.keys() - reported_entries.keys()):
+        parts.append("declared but not reported: " + ", ".join(unreported))
+    # Same names, different content. Worth its own wording: a tool declared
+    # `read` on paper and reported `destructive` under that name is the version
+    # of this mismatch with teeth, and it changes neither list's membership.
+    if altered := sorted(
+        name
+        for name in declared_entries.keys() & reported_entries.keys()
+        if declared_entries[name] != reported_entries[name]
+    ):
+        parts.append("declared differently: " + ", ".join(altered))
+    if not parts:
+        return f"{field} differs"
+    return f"{field} -- " + "; ".join(parts)
+
+
+def manifest_differences(
+    declared: PluginManifest, reported: PluginManifest
+) -> tuple[str, ...]:
+    """Which fields a loaded plugin reported differently from its manifest.
+
+    The registry refuses a plugin whose reported manifest is not equal to the one
+    validated off disk, and equality is deliberately the whole check. But "does
+    not match" is a useless thing to tell somebody holding two files: the cause
+    is almost always one field updated in one place and not the other, and
+    finding it by eye means reading a manifest against a source file line by
+    line. Both objects are in hand at the point of refusal, so name the field.
+
+    One entry per differing field, for a caller that puts each on its own line.
+    Empty only if the models compare unequal on something their JSON form does
+    not carry, in which case the caller keeps its unqualified message.
+    """
+    was = declared.model_dump(mode="json")
+    now = reported.model_dump(mode="json")
+    return tuple(
+        _describe_difference(field, was.get(field), now.get(field))
+        for field in sorted(was.keys() | now.keys())
+        if was.get(field) != now.get(field)
+    )
+
+
 @runtime_checkable
 class Plugin(Protocol):
     """The entire plugin ABI: an object that reports its own manifest.
