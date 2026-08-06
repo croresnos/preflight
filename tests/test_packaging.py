@@ -50,7 +50,9 @@ def wheel_contents(tmp_path_factory) -> frozenset[str]:
     if completed.returncode != 0:
         pytest.skip(f"could not build a wheel here: {completed.stderr.strip()[-300:]}")
 
-    built = list(destination.glob("preflight-*.whl"))
+    # `preflight_gate`, not `preflight`: the distribution is named for what the
+    # import is not. PyPI's `preflight` is an unrelated 2015 Django project.
+    built = list(destination.glob("preflight_gate-*.whl"))
     assert len(built) == 1, f"expected exactly one wheel, got {built}"
     with zipfile.ZipFile(built[0]) as archive:
         return frozenset(archive.namelist())
@@ -86,3 +88,22 @@ def test_the_wheel_carries_no_compiled_leftovers(wheel_contents):
     litter = [path for path in wheel_contents if "__pycache__" in path or path.endswith(".pyc")]
 
     assert not litter, f"build tree leaked into the wheel: {litter}"
+
+
+def test_the_declared_version_and_the_importable_one_agree():
+    """Two files state the version, and `preflight --version` reads only one.
+
+    A wheel built from a pyproject that says 0.6.0 installs a package whose
+    `--version` says whatever `__init__` says. Nothing else in the suite would
+    notice them drifting apart, and the number is what a person quotes in a bug
+    report.
+    """
+    import tomllib
+
+    import preflight
+
+    declared = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["version"]
+
+    assert declared == preflight.__version__

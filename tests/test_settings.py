@@ -36,18 +36,8 @@ from preflight.settings import (
 from test_inspect import _manifest, _write_package  # noqa: E402
 
 
-@pytest.fixture(autouse=True)
-def _isolate_user_config(tmp_path, monkeypatch):
-    """Keep every test off the real user's settings file, in both directions.
-
-    Without this a developer's own ``preflight settings`` would change what the
-    suite asserts, and the suite would overwrite theirs.
-    """
-    home = tmp_path / "_config"
-    home.mkdir()
-    monkeypatch.setenv("APPDATA", str(home))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
-    return home
+# `_isolate_user_config` is in conftest.py -- every test file needs it now that
+# `check` reads platform and edition from the same settings, not just this one.
 
 
 def _write_settings(folder: Path, document: dict) -> Path:
