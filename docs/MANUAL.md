@@ -870,6 +870,8 @@ Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.j
   0 loaded, 1 refused -- 0 of the 1 stopped before any of their code ran
 ```
 
+Each break above has an undo printed beside it, but a skipped or mistyped undo leaves the sandbox failing for a reason you are no longer looking for. `preflight try` on a folder it already wrote says so and offers `--force`, which rewrites all four files back to the loading state. It refuses a folder it did not write whatever state that folder is in, because overwriting somebody's own `host.py` is the one irreversible thing this command could do.
+
 `1 of the 1` against `0 of the 1` is the whole distinction the library is built around, on your own code, in about a minute. The second one's top-level code ran before anything caught it — which is the honest limit of a check that needs an object to interrogate.
 
 This command writes plugin code, which `create` deliberately refuses to do. That is the difference between a sandbox and a real adoption: a manifest records what *you* permit, and preflight guessing at that would defeat the point. Do not build on what `try` writes.

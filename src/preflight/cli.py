@@ -391,6 +391,18 @@ _BREAKS_WINDOWS = (
 )
 
 
+def _is_sandbox(root: Path) -> bool:
+    """Whether this folder is one ``try`` wrote, rather than somebody's own work.
+
+    Both files, because either alone is something a person could plausibly have
+    of their own: ``host.py`` is an ordinary name, and a ``plugins/weather/``
+    package is the shape this command exists to teach.
+    """
+    return (root / "host.py").is_file() and (
+        root / "plugins" / "weather" / MANIFEST_NAME
+    ).is_file()
+
+
 def _try(args: argparse.Namespace) -> int:
     """Write a working host and one plugin, so there is something to break.
 
@@ -401,11 +413,24 @@ def _try(args: argparse.Namespace) -> int:
     """
     root = Path(args.path).resolve()
     if root.exists() and any(root.iterdir()) and not args.force:
-        print(
-            f"preflight: '{root}' already exists and is not empty. Pass --force to\n"
-            f"write into it anyway, or name a folder that does not exist yet.",
-            file=sys.stderr,
-        )
+        # The exercises below leave the sandbox broken on purpose, and undoing
+        # them is a manual step somebody can skip or mistype. A returning reader
+        # then meets a folder in a state nothing on screen explains -- and
+        # "write into it anyway" reads as an override to be avoided rather than
+        # as the reset it would be. Say which of the two situations this is.
+        if _is_sandbox(root):
+            print(
+                f"preflight: '{root}' is already a preflight sandbox.\n"
+                f"It may have been left part-way through one of the exercises. Pass\n"
+                f"--force to reset it to the working state.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"preflight: '{root}' already exists and is not empty. Pass --force to\n"
+                f"write into it anyway, or name a folder that does not exist yet.",
+                file=sys.stderr,
+            )
         return 2
 
     package = root / "plugins" / "weather"

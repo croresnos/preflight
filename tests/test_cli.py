@@ -512,6 +512,36 @@ def test_try_refuses_a_folder_that_is_not_empty(tmp_path, capsys):
     assert (root / "host.py").read_text(encoding="utf-8") != "mine\n"
 
 
+def test_try_offers_to_reset_a_sandbox_it_wrote_itself(tmp_path, capsys):
+    """A half-broken sandbox is the state a returning reader actually finds.
+
+    The exercises leave it broken on purpose and undoing them is manual, so the
+    folder somebody comes back to may be in any of three failing states. Told
+    only that it "already exists and is not empty", they keep it and run it --
+    and the first thing they see is a refusal that nothing explains, from a
+    tutorial whose whole shape is *watch it work, then break it*.
+
+    The generic message stays for a folder preflight did not write, which is the
+    case above: overwriting somebody's own `host.py` is the one irreversible
+    thing this command can do, and it should still sound like it.
+    """
+    root = tmp_path / "sandbox"
+    assert main(["try", str(root)]) == 0
+    capsys.readouterr()
+    plugin = root / "plugins" / "weather" / "plugin.py"
+    broken = plugin.read_text(encoding="utf-8").replace('"1.0.0"', '"2.0.0"')
+    plugin.write_text(broken, encoding="utf-8")
+
+    assert main(["try", str(root)]) == 2
+    message = capsys.readouterr().err
+    assert "already a preflight sandbox" in message
+    assert "--force to reset it" in message
+    assert plugin.read_text(encoding="utf-8") == broken, "a refusal must change nothing"
+
+    assert main(["try", str(root), "--force"]) == 0
+    assert '"1.0.0"' in plugin.read_text(encoding="utf-8")
+
+
 def test_try_does_not_touch_sys_path(tmp_path, capsys):
     # `try` writes the sys.path line into host.py precisely because preflight
     # will not run it for you. It must not quietly do it here either.
