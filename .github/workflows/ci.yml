@@ -1,0 +1,89 @@
+# The suite, on every Python and both OSes that matter -- and then the shipped
+# artefact, separately.
+#
+# The second job is not redundant. `packaging` once broke while every other test
+# was green: the examples live outside `src/`, a wheel does not collect them by
+# default, and an installed copy lost `preflight demo` without anything failing.
+# `scripts/uat.sh` builds a wheel for that reason and this borrows the habit.
+name: CI
+
+on:
+  push:
+    branches: [main, settings]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is not optional. `settings.py` decides whether a planted file
+        # is inside an inspected folder with `os.path.normcase`, and resolves the
+        # user config directory from `%APPDATA%`. Neither branch runs anywhere
+        # else, and both are load-bearing for the settings threat model.
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Test
+        run: python -m pytest -q
+
+  wheel:
+    name: demo from a built wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build
+        run: python -m pip install --upgrade pip build && python -m build --wheel
+
+      - name: Install the wheel into a clean environment
+        # Deliberately not an editable install and deliberately not the checkout:
+        # the point is to exercise what a stranger gets from `pip install`.
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/python -m pip install --upgrade pip
+          /tmp/fresh/bin/python -m pip install dist/*.whl
+
+      - name: The console script exists and answers
+        run: /tmp/fresh/bin/preflight --version
+
+      - name: The examples shipped, so the demo runs with no clone
+        # Run from `/` so a working directory containing this repository cannot
+        # be what makes it work.
+        working-directory: /
+        run: |
+          /tmp/fresh/bin/preflight demo | tee /tmp/demo.txt
+          grep -q "2 loaded, 3 refused" /tmp/demo.txt
+
+      - name: `check` still exits non-zero on a package that would be refused
+        working-directory: /
+        run: |
+          if /tmp/fresh/bin/preflight check "$GITHUB_WORKSPACE/examples/plugins"; then
+            echo "expected exit 1: trespasser's entrypoint points out of tree" >&2
+            exit 1
+          fi
