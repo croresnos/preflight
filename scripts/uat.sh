@@ -34,9 +34,14 @@ PF="$UAT/tree/.venv/Scripts/preflight.exe"
 "$PY" -m pip install -q -e . 2>&1 | grep -v notice
 "$PY" -m pip install -q pytest 2>&1 | grep -v notice
 check "editable install exposes the console script" "$([ -f "$PF" ] && echo yes)" "yes"
+# Read the expected version rather than hardcoding it: this line was still
+# asserting 0.5.0 after the release that made it 0.6.0, which is the sort of
+# thing a UAT is supposed to catch rather than commit.
+VERSION=$(grep -m1 '^__version__' "$SRC/src/preflight/__init__.py" | cut -d'"' -f2)
 V=$("$PF" --version 2>&1)
-check "--version reports 0.5.0" "$V" "preflight 0.5.0"
-DEPS=$("$PY" -m pip show preflight 2>/dev/null | grep -i '^Requires:' | sed 's/Requires: //')
+check "--version reports $VERSION" "$V" "preflight $VERSION"
+# The distribution is preflight-gate; the import and the command are preflight.
+DEPS=$("$PY" -m pip show preflight-gate 2>/dev/null | grep -i '^Requires:' | sed 's/Requires: //')
 check "exactly one runtime dependency" "$DEPS" "pydantic"
 
 section "2. Test suite in the fresh venv"
@@ -240,6 +245,30 @@ check "README no longer claims there is no config file" "$(grep -c 'There is no 
 check "Policy docstring no longer claims it either" "$(grep -c 'There is no configuration file' "$SRC/src/preflight/load.py")" "0"
 check "manual documents the forgeable-marker limit" "$(grep -c 'it is a filter, not a' "$MAN")" "1"
 check "manual names the unforgeable anchor" "$(grep -c 'cannot be forged is your' "$MAN")" "1"
+check "manual has the check table" "$(grep -c '^## 14\. What it checks' "$MAN")" "1"
+check "manual has why-it-exists" "$(grep -c '^## 15\. Why it exists' "$MAN")" "1"
+# The install line is the one instruction nobody can verify before following it,
+# and `pip install preflight` fetches an unrelated 2015 Django package.
+check "no doc says to install the wrong package" \
+  "$(grep -h 'pip install preflight$' "$SRC/README.md" "$MAN" | wc -l | tr -d ' ')" "0"
+check "README names the real distribution" \
+  "$([ "$(grep -c 'pip install preflight-gate' "$SRC/README.md")" -ge 1 ] && echo yes)" "yes"
+check "manual names it too" \
+  "$([ "$(grep -c 'pip install preflight-gate' "$MAN")" -ge 1 ] && echo yes)" "yes"
+check "README leads with who it is for" "$(grep -c 'Is this for you' "$SRC/README.md")" "1"
+
+section "12. check agrees with the gate"
+mkdir -p "$UAT/work/tiers/exp" && cd "$UAT/work/tiers/exp"
+: > __init__.py
+printf 'def create_plugin():\n    return None\n' > plugin.py
+printf '{"package_id":"probe.exp","core_api_version":"1.0","visibility":"public",' > manifest.json
+printf '"release_ring":"experimental","entrypoint":"exp.plugin:create_plugin",' >> manifest.json
+printf '"plugin":{"plugin_id":"exp","name":"E","module_version":"1.0.0"}}' >> manifest.json
+cd "$UAT/work/tiers"
+O=$("$PF" check exp 2>&1); RC=$?
+check "check exits 1 on a ring this build refuses" "$RC" "1"
+has "and quotes the gate's own sentence" "$O" "from the 'experimental' release ring"
+cd "$UAT/work"
 
 printf "\n\033[1m===================== RESULT =====================\033[0m\n"
 printf "  passed: %s\n  failed: %s\n" "$PASS" "$FAIL"

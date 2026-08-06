@@ -23,6 +23,8 @@ your own output prints the real directory.
 11. [Worked examples](#11-worked-examples)
 12. [Saving your settings](#12-saving-your-settings)
 13. [preflight inside an agent](#13-preflight-inside-an-agent)
+14. [What it checks, in order — and the test for each](#14-what-it-checks-in-order--and-the-test-for-each)
+15. [Why it exists](#15-why-it-exists)
 
 ---
 
@@ -54,15 +56,28 @@ wrong tool and no amount of configuration will change that.
 ## 2. Install
 
 ```
-python -m pip install "preflight @ git+https://github.com/croresnos/preflight"
+pip install preflight-gate
 ```
 
 Python 3.11 or newer. The only dependency is pydantic.
+
+**The distribution is `preflight-gate`; everything else is `preflight`** — the
+import, the command, the manifest schema. PyPI's `preflight` is an unrelated Django
+project last released in 2015, so that one name was never available. You only ever
+type `preflight-gate` once.
 
 Check it landed:
 
 ```
 preflight --version
+```
+
+If that prints a version you did not expect, or nothing at all, the command on your
+`PATH` belongs to a different environment. Ask the interpreter you are actually
+about to run your host with:
+
+```
+python -c "import preflight, sys; print(preflight.__version__, sys.executable)"
 ```
 
 Then watch it refuse things, which takes about four seconds and is the fastest way
@@ -88,7 +103,8 @@ That writes a working host, one plugin, and its manifest, then names three ways 
 break them. Section 3 builds the same thing by hand, which is worth doing once;
 `try` is for when you would rather start from something that already runs.
 
-`try` writes plugin code. `create` (section 5) deliberately does not — a manifest
+`try` writes plugin code. `create` ([section 6](#6-adopting-a-package-you-did-not-write))
+deliberately does not — a manifest
 records what *you* permit, so preflight inventing it would defeat the point. Treat
 what `try` writes as a sandbox, not as the start of something you ship.
 
@@ -303,7 +319,7 @@ levels](#101-tool-risk-levels).
 Everything is a keyword argument and there is no configuration file, because a
 settings file living next to your plugins would be a file a plugin could write. The
 defaults are the strictest values available, so a call that passes no `Policy` at
-all is the safest call you can make. Other settings: [Settings](../README.md#settings).
+all is the safest call you can make. Other settings: [Settings](../README.md#policy).
 
 ---
 
@@ -503,7 +519,7 @@ wins, which is why that order is yours to choose.</td></tr>
 <tr><td><code>&lt;edition&gt; build cannot load '&lt;id&gt;' with visibility '&lt;v&gt;'</code><br>
 <code>&lt;edition&gt; build cannot load '&lt;id&gt;' from the '&lt;ring&gt;' release ring</code></td>
 <td>Only if you set <code>Policy(edition=...)</code>. Most hosts never do — see
-<a href="../README.md#release-tiers-optional">Release tiers</a>.</td></tr>
+<a href="#103-release-tiers-optional">Release tiers</a>.</td></tr>
 </table>
 
 ### 7.3 Refusals that happen after the plugin has run
@@ -616,7 +632,7 @@ disk, and it reads declarations rather than code.
 
 **Something else went wrong.**
 Every check preflight makes is listed in order, each naming the test that proves it,
-in [What it checks, in order](../README.md#what-it-checks-in-order--and-the-test-for-each).
+in [What it checks, in order](#14-what-it-checks-in-order--and-the-test-for-each).
 If the behaviour you are seeing is not one of those rows, it is a bug — please open
 an issue with the report `print(result)` produced.
 
@@ -697,7 +713,7 @@ The flag takes a comma-separated list and is repeatable (`--refuse destructive,f
 
 To stop retyping it on every command, save it: [`preflight settings`](#12-saving-your-settings). A saved rule applies to `check` and `demo` automatically, and passing `--refuse` **replaces** it for that one run rather than adding to it — so the flag can loosen as well as tighten.
 
-**Note the line naming `Policy(...)`.** It is there because this command decides nothing that lasts. Run it in a pre-commit hook and it will stop a package entering your repository; it will not stop one loading at runtime, because it is not running then. The same rule enforced by the gate is [`Policy(refuse_tool_risks=...)`](../README.md#settings), and that is where it takes effect.
+**Note the line naming `Policy(...)`.** It is there because this command decides nothing that lasts. Run it in a pre-commit hook and it will stop a package entering your repository; it will not stop one loading at runtime, because it is not running then. The same rule enforced by the gate is [`Policy(refuse_tool_risks=...)`](../README.md#policy), and that is where it takes effect.
 
 ### 9.3 When there is no manifest
 
@@ -1131,8 +1147,17 @@ lock. The only anchor that cannot be forged is your **user-scope** file, because
 lives somewhere nothing is ever unpacked into. `tests/test_settings.py` pins the
 forged-marker case explicitly, so it is a known boundary rather than a surprise.
 
-A settings file found *inside* the directory you are inspecting is ignored and
-says so:
+Either placement is ignored out loud, and the message names which one it was. A
+file *inside* the directory you are inspecting:
+
+```
+preflight: ignoring <root>\downloads\evil\preflight.settings.json
+           it is inside the folder being inspected, so it is in the hands of whatever put it there.
+           preflight is not configured by the thing it is inspecting. Move it to
+           your project root to have it apply.
+```
+
+And one *beside* it, in a directory with no sign of having been made by hand:
 
 ```
 preflight: ignoring <root>\downloads\preflight.settings.json
@@ -1251,7 +1276,7 @@ the right division of labour rather than a missing feature.
 Start to finish, the first time:
 
 ```
-pip install preflight
+pip install preflight-gate
 
 preflight try sandbox           # 1. a working host and plugin, to break on purpose
 cd sandbox && python host.py
@@ -1352,8 +1377,12 @@ drift. Two habits keep them honest:
 
 ```
 preflight settings --as-python        # regenerate the Policy line, paste, diff it
-preflight check ./plugins/* --profile production
+preflight check ./plugins --profile production
 ```
+
+`check` takes **one** path. Point it at the directory holding your plugin packages
+and it reports on each one in turn — a shell glob would hand it several arguments
+and it would exit `2` rather than checking anything.
 
 Give the profile the name of the deployment it mirrors, so `--profile production`
 and your production `Policy` are visibly the same rule asked in two places. And put
@@ -1369,3 +1398,105 @@ your process. preflight has no power after the import: it is not a sandbox, it d
 not read plugin code, and it cannot tell you whether a package does what its
 manifest claims. What it gives you is the ability to say no *before* the import —
 and, in `outcome.code_ran`, an honest record of whether it managed to.
+
+---
+
+## 14. What it checks, in order — and the test for each
+
+Every row names the test that proves it. If you doubt a row, run that test; if a row
+had no test, it would not be in this table.
+
+| # | Check | Test |
+|---|---|---|
+| 1 | The manifest file is inside `trusted_root` | `test_manifest_file_is_confined_and_validated_before_import` |
+| 2 | The manifest is under 256 KiB — refused before it is even parsed | `test_an_oversized_manifest_is_refused_before_it_is_even_parsed` |
+| 3 | It is valid JSON and validates against a **closed** schema (an unknown field is a refusal, not a shrug) | `test_plugin_package_manifest_is_closed_and_has_a_strict_entrypoint` |
+| 4 | The manifest is re-validated at registration, so a model mutated in memory cannot slip through | `test_registry_revalidates_mutated_manifests_before_loading` |
+| 5 | `package_id` is on the build's explicit allowlist | `test_public_registry_requires_an_explicit_build_allowlist_before_loading` |
+| 5a | A package found on disk but absent from `allow` is never imported — discovery does not imply loading | `test_a_package_on_disk_but_not_in_allow_is_never_imported`, `test_an_empty_allowlist_loads_nothing_that_is_sitting_there` |
+| 5b | Load order follows `allow`, so tool-name precedence is the host's decision and not the filesystem's | `test_load_order_follows_the_allowlist_not_the_filesystem` |
+| 5c | A tool risk the host refuses stops the package before the import | `test_a_refused_tool_risk_stops_the_plugin_before_it_is_imported` |
+| 6 | The plugin supports the platform this build is running on | `test_a_plugin_that_does_not_support_the_host_platform_is_refused_before_loading` |
+| 7 | `visibility` and `release_ring` are both accepted by this build's edition | `test_public_registry_rejects_non_public_modules_before_loading` |
+| 8 | A restricted plugin cannot label itself with the stable ring | `test_plugin_package_manifest_is_closed_and_has_a_strict_entrypoint` |
+| 9 | `plugin_id` is not already registered | `test_a_second_package_claiming_a_registered_plugin_id_is_refused_before_loading` |
+| 10 | No duplicate tool names inside one package | `test_duplicate_declared_tool_names_are_rejected_before_loading` |
+| 11 | No tool name already owned by a loaded plugin | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
+| 12 | The entrypoint module — **and every parent package on the way to it** — resolves to a file inside `trusted_root`, located without being executed | `test_an_entrypoint_outside_the_trusted_root_never_executes`, `test_a_dotted_entrypoint_cannot_execute_an_out_of_tree_parent_package` |
+| 13 | A module with no file on disk (built-in, frozen, namespace package) is refused rather than trusted | `test_an_entrypoint_naming_a_builtin_module_is_refused`, `test_an_entrypoint_naming_a_standard_library_module_is_refused` |
+| 13n | *Not a check.* Four unrelated mistakes reach row 13, so the refusal names which one, read off the filesystem after the decision is made. It cannot widen what loads. | `test_a_folder_without_an_init_is_told_it_is_a_folder_without_an_init`, `test_a_name_that_is_not_in_the_root_at_all_points_at_the_manifest`, `test_a_root_that_is_not_on_sys_path_says_so_rather_than_blaming_the_plugin`, `test_a_plugin_folder_named_after_a_builtin_module_is_told_it_collides` |
+| 13a | Resolving a *dotted* entrypoint imports its parent package — `find_spec("a.b")` runs `a` — so the parent clears the boundary before it is resolved, and a package whose `__init__` runs and then fails is reported as having run | `test_a_dotted_entrypoint_cannot_execute_an_out_of_tree_parent_package`, `test_a_package_that_ran_and_then_failed_is_not_reported_as_inert`, `test_a_top_level_entrypoint_is_still_announced_only_at_the_import` |
+| 14 | The confinement check is *what* stops the import — not something else that would have refused anyway | `test_the_confinement_check_is_what_stops_the_out_of_tree_import` |
+| — | **Everything above this line is decided from files on disk**, and no file executes before it has cleared the boundary. The one thing that does execute up here is a dotted entrypoint's parent package, at row 13a — and when it does, `code_ran` says so. | |
+| 15 | After importing, the module's real `__file__` is re-checked against `trusted_root` | `test_a_module_whose_file_changes_after_resolution_is_still_refused` |
+| 16 | The loaded object actually satisfies the `Plugin` protocol | `test_an_entrypoint_returning_something_other_than_a_plugin_is_refused` |
+| 17 | The manifest the object reports equals the manifest its file declared | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
+| 18 | On any refusal the registry is unmodified — no partial registration | asserted in every rejection test above (`registry.available() == ()`) |
+| 19 | Everything handed back out is a deep copy; mutating it cannot reach the registry | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
+| 20 | `preflight check` reports on a package without importing it — including one that was importable at the time | `test_inspecting_a_package_never_imports_it`, `test_check_never_imports_the_package_it_is_pointed_at` |
+| 21 | `preflight check` reaches the same verdict as the gate, in the same words — platform and release ring included, not only declared risk | `test_check_refuses_what_the_gate_refuses_and_says_the_same_thing`, `test_check_exits_non_zero_on_a_risk_the_caller_refused` |
+| 22 | Refusing a risk at the gate stops the plugin with its code still inert, and cannot reach a risk that was never declared | `test_refusing_a_declared_risk_stops_the_janitor_before_it_is_imported`, `test_refusing_a_declared_risk_cannot_reach_a_risk_that_was_never_declared` |
+| 23 | A `manifest.json` belonging to another system is reported as such, not as an invalid preflight manifest | `test_another_systems_manifest_is_reported_as_foreign_rather_than_invalid`, `test_a_preflight_manifest_with_a_mistake_in_it_is_invalid_and_not_foreign` |
+
+Rows 1–14 are the point of the project. Rows 15–17 are what is left over — checks
+that *cannot* be made before the import, because they are about an object, and there
+is no object until something has been imported.
+
+`preflight demo` runs five bundled plugins through this table and refuses three of
+them. Each one prints a tripwire as the first statement of its `__init__.py`, so the
+plugins that appear in the output are exactly the ones that got as far as being
+imported — and the ones that do not appear are the rows above the line, working.
+Plugin by plugin: [Worked examples](#11-worked-examples).
+
+### 14.1 About row 14
+
+A security test that passes both with and without the fix proves nothing.
+`test_the_confinement_check_is_what_stops_the_out_of_tree_import` runs one scenario
+twice through the same harness and changes exactly one thing — which importer the
+registry is handed. The second importer is a copy of what this loader did *before*
+the confinement check existed, kept in the test file as a control condition.
+
+The interesting result is not that the confined importer refuses the plugin. It is
+*when* the unconfined one does: it refuses it too, on a later and unrelated ground,
+having already run the plugin's top-level code. **Raising an exception is not the
+same as failing closed**, and that test is what tells the two apart.
+
+### 14.2 Row 21, and the gap that was there until 0.6.0
+
+`preflight check` used to judge the paperwork and the declared risks, and nothing
+else. A package the gate would refuse for its platform or its release ring printed
+"Paperwork is consistent" and exited `0`.
+
+That mattered because of [§13.4](#134-keeping-the-two-in-step), which recommends the
+command for CI precisely so a plugin that would be refused at startup is caught at
+review time instead. For two of the four preload checks it was answering a smaller
+question than the one being asked of it.
+
+Both paths now call one function — `preflight.registry.preload_refusals` — and
+`tests/test_check_matches_the_gate.py` pins the consequence rather than the
+refactor: the same package, judged twice, must come back with the same answer in the
+same words.
+
+---
+
+## 15. Why it exists
+
+This was extracted from a personal AI assistant — a desktop application with several
+plugin packages and multiple build tiers, where a plugin in the wrong tier reaching a
+shipped build was a real failure mode rather than a hypothetical one. The loader had
+to answer "may this load here?" from the manifest alone, because by the time it could
+ask the plugin, the answer would not have mattered.
+
+The extraction found a hole in the original, and the history keeps it: the first
+three commits land the loader with the bug, and the fourth closes it. Before the fix
+the manifest *file* was confined to the trusted root but the entrypoint *string*
+inside it was confined to nothing, so a manifest in the right place could name any
+importable module on `sys.path`. It is `e0d2f8a`, and
+`tests/test_negative_control.py` measures the difference rather than asserting it.
+
+The reason this generalises beyond one desktop app is that dynamic plugin loading is
+currently exploding in agent tooling — MCP servers, agent skills, tool packs — and
+very little of it is gated. The manifest here already speaks that vocabulary (tools,
+risk levels, permissions) because that is what the original application needed it to
+describe. To be clear about the scope of that claim: this is a plugin trust boundary
+that happens to suit agent tooling, not an agent framework.
