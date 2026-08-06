@@ -55,8 +55,11 @@ def test_the_example_host_loads_two_plugins_and_refuses_three():
     # Refused for claiming a tool name greeter already owns, before importing it.
     assert "tool name collision: 'greeter.hello' is already owned by 'greeter'" in output
     # Refused for reporting a manifest other than the one it declared. This one is
-    # necessarily after the import: there has to be an object to ask.
+    # necessarily after the import: there has to be an object to ask. The refusal
+    # names the smuggled tool, which is the whole reason the example exists --
+    # "does not match" alone would leave the reader to find it themselves.
     assert "does not match its validated package manifest" in output
+    assert "tools -- undeclared in the manifest: impostor.purge_all_records" in output
 
     # Two plugins registered, and the greeter is callable.
     assert "LOADED   greeter" in output

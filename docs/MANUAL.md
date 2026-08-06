@@ -543,12 +543,15 @@ Same field-by-field list as a bad <code>manifest.json</code>, about the object y
 own code returned rather than about a file. Note what is <em>not</em> said here: a
 runtime manifest is never reported as belonging to another system, because there is
 no file for it to belong to.</td></tr>
-<tr><td><code>runtime manifest for '&lt;id&gt;' does not match its validated package manifest</code></td>
+<tr><td><code>runtime manifest for '&lt;id&gt;' does not match its validated package manifest</code><br><code>module_version: manifest says '1.0.0', plugin reports '2.0.0'</code></td>
 <td>The <code>plugin</code> block in <code>manifest.json</code> and the one in the
 running object are not equal. Nearly always drift — someone bumped
-<code>module_version</code> or added a tool in one place only. Diff the two.
-This check is also the one that catches a plugin lying about what it exposes, which
-is why the two copies exist.</td></tr>
+<code>module_version</code> or added a tool in one place only. A line follows for each
+field that differs, so there is nothing to diff by hand. List fields whose entries carry
+names — <code>tools</code> above all — report membership instead of two full dumps:
+<code>tools -- undeclared in the manifest: acme.weather.purge</code>, and
+<code>declared differently</code> for a tool that keeps its name and changes its risk.
+That last shape is the one with teeth, and it is why the two copies exist.</td></tr>
 <tr><td><code>entrypoint module '&lt;name&gt;' was imported from '&lt;path&gt;', which is outside the trusted plugin root</code></td>
 <td>What was resolved and what was imported are not the same file — something
 changed <code>sys.modules</code> in between. Treat this as hostile.</td></tr>
@@ -805,6 +808,7 @@ preflight | plugins\ | 5 packages found
                        tool name collision: 'greeter.hello' is already owned by 'greeter'
   REFUSED  impostor    imported, then rejected
                        runtime manifest for 'example.impostor' does not match its validated package manifest
+                       tools -- undeclared in the manifest: impostor.purge_all_records
   REFUSED  janitor     never imported
                        package 'example.janitor' declares tool 'janitor.purge_cache' with risk 'destructive', which this host refuses
 
@@ -861,6 +865,7 @@ Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.j
 ```
   REFUSED  weather  imported, then rejected
                     runtime manifest for 'local.weather' does not match its validated package manifest
+                    module_version: manifest says '1.0.0', plugin reports '2.0.0'
 
   0 loaded, 1 refused -- 0 of the 1 stopped before any of their code ran
 ```
@@ -1013,6 +1018,7 @@ preflight | plugins\ | 5 packages found
                        tool name collision: 'greeter.hello' is already owned by 'greeter'
   REFUSED  impostor    imported, then rejected
                        runtime manifest for 'example.impostor' does not match its validated package manifest
+                       tools -- undeclared in the manifest: impostor.purge_all_records
   LOADED   janitor     Janitor 1.0.0 - 1 tool
 
   2 loaded, 3 refused -- 2 of the 3 stopped before any of their code ran

@@ -20,6 +20,8 @@ from preflight import (
     PluginPackageManifest,
     PluginRegistry,
     PluginRejected,
+    Tool,
+    ToolRisk,
     public_build,
 )
 
@@ -53,6 +55,73 @@ def _package(
 class _Plugin:
     def __init__(self, manifest: PluginManifest):
         self.manifest = manifest
+
+
+def test_a_runtime_mismatch_names_the_field_and_both_values():
+    """"Does not match" alone leaves somebody diffing two files by eye.
+
+    This is the refusal a person meets when a version was bumped in the code and
+    not in the manifest, which is the ordinary way to reach it and the one the
+    `preflight try` exercises stage deliberately. Unqualified, its next step is a
+    manual comparison of a manifest against a source file; the two objects being
+    compared are both in hand at the point of refusal, so it can do better.
+    """
+    package = _package()
+    drifted = _Plugin(package.plugin.model_copy(update={"module_version": "2.0.0"}))
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+
+    with pytest.raises(PluginRejected) as refusal:
+        registry.register(package, lambda: drifted, origin="built-in")
+
+    message = str(refusal.value)
+    assert "does not match its validated package manifest" in message
+    assert "module_version: manifest says '1.0.0', plugin reports '2.0.0'" in message
+
+
+def test_a_runtime_mismatch_in_the_tool_list_names_the_tool():
+    """The tools case, which is the one with security consequences.
+
+    A host builds its permission prompts from `registry.available()`, so a
+    plugin that declares two tools and reports three is trying to be advertised
+    for something the gate never saw. Rendering both whole tool lists to show it
+    would bury the answer in schema and truncate away the appended entry, so the
+    difference is reported as membership: which names appeared, went missing, or
+    changed while keeping their name.
+    """
+    package = _package()
+    extra = Tool.model_validate({"name": "mail.test.purge", "risk": "destructive"})
+    smuggled = _Plugin(
+        package.plugin.model_copy(update={"tools": [*package.plugin.tools, extra]})
+    )
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+
+    with pytest.raises(PluginRejected) as refusal:
+        registry.register(package, lambda: smuggled, origin="built-in")
+
+    assert "tools -- undeclared in the manifest: mail.test.purge" in str(refusal.value)
+
+
+def test_a_tool_that_keeps_its_name_and_changes_its_risk_is_named_too():
+    """Neither list gains nor loses an entry, and this is the dangerous shape.
+
+    `read` on paper and `destructive` once loaded is the mismatch a membership
+    diff alone would report as "tools differ" -- the same names, both sides.
+    """
+    package = _package()
+    louder = package.plugin.tools[0].model_copy(update={"risk": ToolRisk.DESTRUCTIVE})
+    lying = _Plugin(package.plugin.model_copy(update={"tools": [louder]}))
+    registry = public_build(
+        allowed_package_ids={package.package_id}, platform="windows"
+    )
+
+    with pytest.raises(PluginRejected) as refusal:
+        registry.register(package, lambda: lying, origin="built-in")
+
+    assert "tools -- declared differently: mail.test.search" in str(refusal.value)
 
 
 def test_plugin_package_manifest_is_closed_and_has_a_strict_entrypoint():

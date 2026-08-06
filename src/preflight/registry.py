@@ -34,6 +34,7 @@ from preflight.manifest import (
     Tool,
     ToolRisk,
     Visibility,
+    manifest_differences,
     manifest_error_message,
 )
 
@@ -432,10 +433,15 @@ class PluginRegistry:
                 )
             ) from exc
         if runtime_manifest != package.plugin:
-            raise PluginRejected(
+            # Equality is the whole check, but "not equal" is not a whole
+            # message: the reader is left diffing a manifest against a source
+            # file by eye. Both objects are here, so say which fields disagree.
+            refusal = (
                 f"runtime manifest for '{package.package_id}' does not match "
                 "its validated package manifest"
             )
+            differences = manifest_differences(package.plugin, runtime_manifest)
+            raise PluginRejected("\n".join((refusal, *differences)))
 
         registered = RegisteredPlugin(
             package=package,
