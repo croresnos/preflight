@@ -42,7 +42,16 @@ def wheel_contents(tmp_path_factory) -> frozenset[str]:
     """
     destination = tmp_path_factory.mktemp("wheel")
     completed = subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(REPO_ROOT), "--no-deps", "-w", str(destination)],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            str(REPO_ROOT),
+            "--no-deps",
+            "-w",
+            str(destination),
+        ],
         capture_output=True,
         text=True,
         timeout=600,
@@ -85,7 +94,11 @@ def test_the_wheel_carries_the_marker_that_makes_its_annotations_usable(wheel_co
 def test_the_wheel_carries_no_compiled_leftovers(wheel_contents):
     # The examples are copied out of a working tree that has been run, so this
     # is a live risk rather than a hypothetical one.
-    litter = [path for path in wheel_contents if "__pycache__" in path or path.endswith(".pyc")]
+    litter = [
+        path
+        for path in wheel_contents
+        if "__pycache__" in path or path.endswith(".pyc")
+    ]
 
     assert not litter, f"build tree leaked into the wheel: {litter}"
 

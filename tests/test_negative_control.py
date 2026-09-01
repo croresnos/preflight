@@ -93,9 +93,7 @@ def _run_scenario(tmp_path: Path, monkeypatch, *, importer, label: str):
 
     registry = public_build(allowed_package_ids={"example.outsider"})
     with pytest.raises(PluginRejected) as refusal:
-        registry.load_manifest_file(
-            manifest_path, trusted_root=root, importer=importer
-        )
+        registry.load_manifest_file(manifest_path, trusted_root=root, importer=importer)
 
     assert registry.available() == ()
     return tripwire.exists(), str(refusal.value)

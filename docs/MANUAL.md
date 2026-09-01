@@ -246,7 +246,7 @@ your host decides what a refusal means. That is deliberate — one bad plugin sh
 not take down the application — but it means this line is a trap:
 
 ```python
-print(result.plugins["greeter"].hello("world"))   # KeyError if greeter was refused
+print(result.plugins["greeter"].hello("world"))  # KeyError if greeter was refused
 ```
 
 In anything real, ask first:
@@ -254,7 +254,7 @@ In anything real, ask first:
 ```python
 greeter = result.plugins.get("greeter")
 if greeter is None:
-    ...        # log result.refused and carry on, or exit, or fall back
+    ...  # log result.refused and carry on, or exit, or fall back
 ```
 
 `result.plugins` holds only what loaded. `result.refused` holds the outcomes that
@@ -350,15 +350,29 @@ number is worth believing.
 Programmatically:
 
 ```python
-result.plugins          # {plugin_id: instance} -- only what loaded
-result.loaded           # the outcomes that loaded
-result.refused          # the outcomes that did not
+result.plugins  # {plugin_id: instance} -- only what loaded
+result.get("weather")  # one instance, or None if it did not load
+result.loaded  # the outcomes that loaded
+result.refused  # the outcomes that did not
+result.text()  # the report above, as a string
 for outcome in result.refused:
-    outcome.folder      # the directory name
-    outcome.reason      # the refusal message
-    outcome.code_ran    # True if the plugin's code executed first
-    outcome.stage       # "never imported" | "imported, then rejected"
+    outcome.folder  # the directory name
+    outcome.reason  # the refusal message
+    outcome.code_ran  # True if the plugin's code executed first
+    outcome.stage  # "never imported" | "imported, then rejected"
+for outcome in result.loaded:
+    outcome.self_reported  # False if a bare entrypoint waived check 17 (6.1)
 ```
+
+`result.get(id)` rather than `result.plugins[id]` is the habit worth forming, and
+the sandbox `try` writes uses it for a reason: a refusal is an ordinary outcome, so
+the plugin you were expecting may simply not be there, and `.get` makes you decide
+what that means instead of raising `KeyError` at you.
+
+**Nothing in `load_plugins` stops your program.** A refusal is data. If your host
+cannot run without its plugins, say so — the generated `host.py` ends with
+`sys.exit(1 if result.refused else 0)`, which is the smallest version of that
+decision.
 
 ---
 
@@ -371,6 +385,7 @@ write the manifest, because you are the one setting the terms:
 preflight create plugins/weather
 ```
 
+<!-- transcript: preflight create plugins/weather | setup=unmanaged_weather -->
 ```
 wrote <root>\plugins\weather\manifest.json
 
@@ -378,13 +393,21 @@ wrote <root>\plugins\weather\manifest.json
   did not read its code and has not checked whether the two agree.
   An empty `tools` list means it may expose none.
 
+  This package does not report its own manifest, so preflight will
+  adapt it using this file. Everything else is checked as usual.
+  To have the package state its own manifest and be checked against
+  it, run again with --adapter.
+
   Next:
       preflight check <root>\plugins\weather
 ```
 
 It writes a minimal manifest with `tools: []` — permitting nothing — and guesses the
-entrypoint from the folder name. Open it and write down what you actually intend to
-allow. `preflight check` then reads it back without importing anything:
+entrypoint by looking at what is on disk: `<name>.plugin` when the package has a
+`plugin.py`, the package itself otherwise, and with no `:attribute` half at all
+when neither file defines a `create_plugin` to point at. Open it and write down
+what you actually intend to allow. `preflight check` then reads it back without
+importing anything:
 
 ```
 preflight check | weather\ | nothing was executed
@@ -408,6 +431,47 @@ last two lines are there because that distinction is the whole point.
 `check` exits `0` when the package would load, `1` when it would be refused, and `2`
 when you pointed it at something that is not a directory — so it works in a script
 without anyone reading the output.
+
+### 6.1 The entrypoint has two shapes, and this is the one that matters here
+
+A package written for preflight ends its entrypoint with `:create_plugin`, and the
+gate then requires the object that comes back to report a manifest **equal to the
+one in the file** — check 17. That is a real check, and it is the reason the two
+descriptions are written out twice.
+
+A package that has never heard of preflight was never going to return a
+`PluginManifest`. So its manifest names the module and stops:
+
+```json
+"entrypoint": "weather"
+```
+
+preflight imports that module and adapts it, using the `plugin` block from the
+manifest as its description. Everything else is unchanged — the manifest is still
+confined to the trusted root, the module is still resolved to a file inside it
+before anything is imported, and the tools the host advertises still come from
+this file rather than from the object. The one check you do not get is 17, because
+there is no second statement to compare against. That is a **waiver, not a pass**,
+and it is visible wherever the package is reported:
+
+```
+  LOADED   weather  Weather 0.1.0 - 1 tool  (adapted; manifest not self-reported)
+```
+
+The host then uses it exactly as it would any other plugin — `result.get("weather")`
+returns an object that carries the manifest and forwards everything else to your
+module:
+
+```python
+result = load_plugins(PLUGINS, allow=["local.weather"])
+result.get("weather").forecast("tomorrow")  # your module's own function
+```
+
+**If you own the package, take the check.** `preflight create <folder> --adapter`
+writes a `plugin.py` stating the same manifest in Python, points the entrypoint at
+it, and from then on a version bumped in one file and not the other is a refusal.
+That duplication is not redundancy; it is the thing check 17 compares. It will not
+overwrite a `plugin.py` you already have.
 
 **Neither command protects a running application.** Writing a manifest is a decision
 you record; enforcing it is `load_plugins`, in your host, at startup. Full CLI
@@ -494,15 +558,22 @@ on macOS and Linux.)</td></tr>
 <code>load_plugins</code> catches this earlier and more loudly (see 7.1); you only
 reach it here by driving <code>PluginRegistry</code> yourself.</td></tr>
 <tr><td><code>the file is there and that root is on sys.path, so something earlier on sys.path is answering to '&lt;name&gt;' first. Rename the plugin folder to a name no installed package already uses.</code></td>
-<td>Your plugin folder is named after something already importable — a stdlib module
-(<code>time</code>, <code>json</code>, <code>types</code>) or an installed package.
-Your paperwork is fine and no amount of fixing it will help; the name is taken
-before the trusted root is ever consulted. Rename the folder and the
-<code>entrypoint</code> together.</td></tr>
+<td>Your plugin folder is named after a module compiled into the interpreter
+(<code>time</code>, <code>sys</code>, <code>_socket</code>) or frozen into it
+(<code>os</code>). Those are answered by <code>sys.meta_path</code> before
+<code>sys.path</code> is consulted at all, so they report no file, and the name is
+taken in every process whatever a host does to <code>sys.path</code>. Your
+paperwork is fine and no amount of fixing it will help. Rename the folder and the
+<code>entrypoint</code> together. A folder named after a <em>pure-Python</em>
+stdlib module (<code>json</code>, <code>types</code>) does not reach this message —
+it resolves to a real file, and is refused by the row below instead.</td></tr>
 <tr><td><code>entrypoint module '&lt;name&gt;' resolves to '&lt;path&gt;', which is outside the trusted plugin root '&lt;root&gt;'</code></td>
 <td>The entrypoint points at something real but out of bounds — a standard library
-module, or an installed package. This is the check the whole project exists for. It
-is not a configuration problem; do not widen the root to make it go away.</td></tr>
+module, or an installed package. A plugin <em>folder</em> named after a pure-Python
+stdlib module (<code>json</code>, <code>types</code>) lands here too: whichever copy
+the import system already holds under that name is the one it hands back, and it is
+not yours. This is the check the whole project exists for. It is not a configuration
+problem; do not widen the root to make it go away.</td></tr>
 <tr><td><code>package '&lt;id&gt;' does not support platform '&lt;name&gt;'</code></td>
 <td>The manifest's <code>supported_platforms</code> excludes the OS you are on.</td></tr>
 <tr><td><code>package '&lt;id&gt;' declares tool '&lt;tool&gt;' with risk '&lt;risk&gt;', which this host refuses</code></td>
@@ -520,6 +591,14 @@ wins, which is why that order is yours to choose.</td></tr>
 <code>&lt;edition&gt; build cannot load '&lt;id&gt;' from the '&lt;ring&gt;' release ring</code></td>
 <td>Only if you set <code>Policy(edition=...)</code>. Most hosts never do — see
 <a href="#103-release-tiers-optional">Release tiers</a>.</td></tr>
+<tr><td><code>entrypoint module '&lt;name&gt;' is a standard library module name. A host that has already imported '&lt;name&gt;' refuses this package for resolving outside the trusted plugin root '&lt;root&gt;'; one that has not imports this folder in the standard library's place, for the rest of the process. Rename the plugin folder and the entrypoint together.</code></td>
+<td><strong>Printed by <code>preflight check</code>, not by the gate.</strong> The
+command cannot ask the import system which copy of <code>&lt;name&gt;</code> would
+win — <code>find_spec</code> on a dotted name executes the parent package, and this
+command may not run a line of what it is describing. So it names both outcomes
+instead of claiming the one it cannot know, and refuses either way: one of them is
+a refusal at startup, and the other is your plugin silently replacing a standard
+library module for the life of the process. Neither is a thing to ship.</td></tr>
 </table>
 
 ### 7.3 Refusals that happen after the plugin has run
@@ -580,6 +659,25 @@ capped at six with the rest counted.</td></tr>
 <code>import</code> work. The message suggests the corrected name. Either rename the
 folder, or pass <code>--entrypoint</code> explicitly if the code lives
 elsewhere.</td></tr>
+<tr><td><code>entrypoint attribute '&lt;name&gt;' is not defined in &lt;file&gt;</code></td>
+<td>From <code>check</code>, and listed under <em>AFTER importing it</em> because
+that is when a host discovers it. The entrypoint's module resolves, but the
+<code>:attribute</code> half names something that file does not define, so the
+package would be imported and then refused. Either define it, or drop the
+<code>:attribute</code> half so preflight adapts the module using the manifest
+(&sect;6.1). Found by parsing the file, never by running it. Exit code 1.</td></tr>
+<tr><td><code>module '&lt;name&gt;' has no attribute '&lt;attribute&gt;'</code></td>
+<td>The same fault, reached at startup instead of at review time. This is the one
+<code>check</code> exists to save you from — put it in CI.</td></tr>
+<tr><td><code>&lt;path&gt; has files preflight did not write</code></td>
+<td><code>try</code> writes <code>host.py</code> and <code>plugins/</code>, and it
+will not write them over yours. There is no flag for this: <code>--force</code>
+resets a sandbox <em>preflight wrote</em>, and does not take a folder over. Name a
+folder that does not exist yet. Exit code 2.</td></tr>
+<tr><td><code>&lt;path&gt; already exists, and --adapter writes that file</code></td>
+<td>Same rule for <code>create --adapter</code>: it writes a
+<code>plugin.py</code>, and never over one of yours. Point
+<code>--entrypoint</code> at what is already in there. Exit code 2.</td></tr>
 <tr><td><code>unknown risk '&lt;name&gt;'</code></td>
 <td>A bad value for <code>--refuse</code>. The valid ones are listed. Exit code 2.</td></tr>
 <tr><td><code>not a directory</code></td>
@@ -593,6 +691,8 @@ elsewhere.</td></tr>
 | 0 | The package would load |
 | 1 | The package would be refused |
 | 2 | You asked the question wrong — bad path, bad flag, refusing to overwrite |
+
+A package with no `manifest.json` at all exits `1`, even though the report says in as many words that this is *"not a verdict on the package; it is the absence of one."* Both are true: preflight has nothing to judge, and a host asked to load it would refuse it. The exit code answers the host's question, because that is the question a script is asking.
 
 ---
 
@@ -653,6 +753,29 @@ whether to let something near the gate at all, and writing down the terms if you
 
 `preflight check` reads a package's manifest and lists everything it claims the right to do. **It imports nothing** — not the plugin, not `importlib`, not even `find_spec`. The entrypoint is resolved by path arithmetic against the folder on disk, so there is no code path through this command that can cause the inspected package to execute. `tests/test_inspect.py` proves it with a tripwire, on a package that was genuinely importable at the time.
 
+The one question path arithmetic cannot answer is whether the interpreter *already owns* the name your folder is using — a folder called `time` or `json` sits right there on disk and resolves perfectly, while no host can ever reach it. `check` settles that by reading `sys.builtin_module_names` and `sys.stdlib_module_names`, which is a lookup rather than an import, and refuses the package. See §7.2 for what the two cases print and why they are worded differently.
+
+It also opens the entrypoint's own source file, once, to answer the other half of the entrypoint string: **is the `:attribute` actually defined there?** It is read with `ast.parse`, which builds a syntax tree and evaluates none of it — reading a file is not running it — and a name bound anywhere at module level counts, including one bound inside an `if` or by an `import`. Where the tree cannot answer, because the module defines `__getattr__` or does `from x import *`, `check` stays quiet rather than guess: a false `1` is the failure that stops people believing the exit code.
+
+That refusal is reported apart from all the others, and the heading says why:
+
+```
+  1 reason a host would refuse this AFTER importing it:
+    X entrypoint attribute 'create_plugin' is not defined in
+      __init__.py. A host imports 'notepad', asks for 'create_plugin',
+      and refuses the package when it is not there -- by which time
+      the package's code has run. Define it in that file, or shorten
+      the entrypoint to 'notepad' to have preflight adapt the module
+      using this manifest.
+
+  This package would be refused, and not before it had run --
+  the reason above is one only an import can discover.
+```
+
+Every other reason `check` prints is one a host reaches with the package still inert on disk. This one is not, and that difference is the subject of the whole project — so it gets its own list rather than being filed under "before importing it". Both mean exit `1`. Only one of them means nothing happened.
+
+What `check` still cannot tell you: whether the object that attribute yields satisfies the `Plugin` protocol, and whether the manifest it reports matches the one in the file. Those are checks 16 and 17, they need an object, and there is no object until something has been imported. Only the gate reaches them.
+
 ```
 preflight check ./weather
 ```
@@ -689,6 +812,7 @@ By default `check` reports and does not judge: a package declaring a tool that d
 preflight check ./janitor --refuse destructive
 ```
 
+<!-- transcript: preflight check examples/plugins/janitor --refuse destructive | setup=repo -->
 ```
 preflight check | janitor\ | nothing was executed
 
@@ -722,6 +846,7 @@ To stop retyping it on every command, save it: [`preflight settings`](#12-saving
 
 This is the common case for something you just downloaded:
 
+<!-- transcript: preflight check random-repo | setup=empty_repo -->
 ```
 preflight check | random-repo\ | nothing was executed
 
@@ -732,7 +857,7 @@ preflight check | random-repo\ | nothing was executed
   it is the absence of one.
 
   To adopt it anyway, write down what you will permit it to do:
-      preflight create random-repo
+      preflight create <where>/random-repo
 ```
 
 `preflight create` writes a manifest skeleton so you can adopt an unmanaged package on your own terms. Be clear about what it does and does not do: it records **what you permit**, and it does not read the package's code to find out what the package wants. The generated `tools` list is empty, which means the package may expose none until you add them yourself.
@@ -794,6 +919,7 @@ The output is in [section 11](#11-worked-examples). Run it again with a rule att
 preflight demo --refuse destructive
 ```
 
+<!-- transcript: preflight demo --refuse destructive | setup=repo -->
 ```
   [greeter] top-level plugin code is executing
   [impostor] top-level plugin code is executing
@@ -802,7 +928,7 @@ preflight | plugins\ | 5 packages found
 
   LOADED   greeter     Greeter 1.0.0 - 1 tool
   REFUSED  trespasser  never imported
-                       entrypoint module 'json' resolves to '<your-python>/Lib/json/__init__.py',
+                       entrypoint module 'json' resolves to '<your python's stdlib>/json/__init__.py',
                        which is outside the trusted plugin root '.../examples/plugins'
   REFUSED  collider    never imported
                        tool name collision: 'greeter.hello' is already owned by 'greeter'
@@ -813,9 +939,22 @@ preflight | plugins\ | 5 packages found
                        package 'example.janitor' declares tool 'janitor.purge_cache' with risk 'destructive', which this host refuses
 
   1 loaded, 4 refused -- 3 of the 4 stopped before any of their code ran
+
+  The 2 lines above reading `top-level plugin code is executing` are
+  tripwires: the first statement in a plugin package. 3 of the 4 refused
+  plugins never printed one, because they never got an import.
+
+  Two of those refusals are worth comparing. janitor declared its
+  destructive tool in its manifest, so --refuse stopped it while it
+  was still inert on disk. impostor declares two read-only tools and
+  produces a destructive third one only once loaded, where no
+  declaration-based gate can see it -- it was caught afterwards, by
+  comparing what it reported against what it had declared.
+
+  preflight enforces declarations. It does not detect concealment.
 ```
 
-`janitor` is a plugin with nothing wrong with it, refused for being honest about something you said you did not want — and refused while still inert on disk, so its tripwire never fires. `impostor` is the comparison: it declares two read-only tools and produces a destructive third one only once loaded, so `--refuse` never saw it. It is caught anyway, but afterwards, by comparing what it reported against what it declared.
+The command makes that comparison itself, in its last paragraph, because it is the one thing about this output a reader has to leave with. `janitor` is a plugin with nothing wrong with it, refused for being honest about something you said you did not want — and refused while still inert on disk, so its tripwire never fires. `impostor` is the comparison: it declares two read-only tools and produces a destructive third one only once loaded, so `--refuse` never saw it. It is caught anyway, but afterwards, by comparing what it reported against what it declared.
 
 **preflight enforces declarations. It does not detect concealment.** Those two rows are the shortest statement of that difference the project can make.
 
@@ -829,17 +968,45 @@ cd weather-sandbox
 python host.py
 ```
 
+<!-- transcript: preflight try weather-sandbox -->
 ```
 wrote .../weather-sandbox
       host.py                          the gate, 12 lines
+      break.py                         the three exercises below
       plugins/weather/__init__.py      empty, and load-bearing
       plugins/weather/plugin.py        the plugin
       plugins/weather/manifest.json    what it is permitted to do
 
   This one loads. Nothing is wrong with it, which is the least
   interesting state it can be in.
+
+  Run it:
+      cd <where>/weather-sandbox
+      python host.py
+
+  Then break it, three times. Read the refusal before you read the fix.
+
+  1. delete the __init__.py that makes it a package
+       python break.py 1
+       python host.py
+       python break.py 1 --undo
+
+  2. misspell the entrypoint in manifest.json
+       python break.py 2
+       python host.py
+       python break.py 2 --undo
+
+  3. bump module_version in plugin.py only, not in manifest.json
+       python break.py 3
+       python host.py
+       python break.py 3 --undo
+
+  The first two are refused from the manifest alone -- the plugin's
+  code never runs. The third is caught after importing it, and the
+  report tells you which of the two happened.
 ```
 
+<!-- transcript: python host.py | setup=try -->
 ```
 preflight | plugins\ | 1 package found
 
@@ -850,9 +1017,20 @@ preflight | plugins\ | 1 package found
 today: 18C and raining
 ```
 
-It then prints three ways to break it, as commands for your shell. Delete `plugins/weather/__init__.py` and rerun the host:
+It then prints three ways to break it. Each is a single command, and the same command on every shell and every OS — `break.py` is written into the sandbox beside `host.py`, so nothing here depends on whether you are in bash, PowerShell or cmd:
 
 ```
+python break.py 1          # delete the __init__.py that makes it a package
+python host.py             # read the refusal
+python break.py 1 --undo   # put it back
+```
+
+Running a break prints what it changed, which is the part a shell one-liner leaves you to assume. Break 1 deletes `plugins/weather/__init__.py`; rerun the host:
+
+<!-- transcript: python host.py | setup=try_no_init -->
+```
+preflight | plugins/ | 1 package found
+
   REFUSED  weather  never imported
                     entrypoint module 'weather' has no file on disk, so it cannot be shown to live inside the trusted plugin root '.../weather-sandbox/plugins'
                     that folder is on disk but has no __init__.py, so Python treats it as a namespace package and it resolves to no single file. Create an empty '.../weather-sandbox/plugins/weather/__init__.py'.
@@ -862,7 +1040,10 @@ It then prints three ways to break it, as commands for your shell. Delete `plugi
 
 Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.json` alone:
 
+<!-- transcript: python host.py | setup=try_version_drift -->
 ```
+preflight | plugins/ | 1 package found
+
   REFUSED  weather  imported, then rejected
                     runtime manifest for 'local.weather' does not match its validated package manifest
                     module_version: manifest says '1.0.0', plugin reports '2.0.0'
@@ -870,7 +1051,11 @@ Put it back, then bump `module_version` in `plugin.py` only, leaving `manifest.j
   0 loaded, 1 refused -- 0 of the 1 stopped before any of their code ran
 ```
 
-Each break above has an undo printed beside it, but a skipped or mistyped undo leaves the sandbox failing for a reason you are no longer looking for. `preflight try` on a folder it already wrote says so and offers `--force`, which rewrites all four files back to the loading state. It refuses a folder it did not write whatever state that folder is in, because overwriting somebody's own `host.py` is the one irreversible thing this command could do.
+Every break has an undo — `python break.py <n> --undo` — but a skipped one leaves the sandbox failing for a reason you are no longer looking for. `preflight try` on a folder it already wrote says so and offers `--force`, which rewrites all five files back to the loading state.
+
+**`--force` resets a sandbox. There is no flag that overwrites your own work.** A folder holding files preflight did not write is refused whatever you pass, because writing `host.py` over somebody's `host.py` is the one irreversible thing this command could do, and a guarantee with an escape hatch on it is not one.
+
+The generated `host.py` ends with `sys.exit(1 if result.refused else 0)`, which is worth copying for a different reason: a refusal is *data*, not an exception, so nothing inside `load_plugins` stops your program. What a refusal means is the host's decision and it differs — an editor carries on without the plugin, a build fails — but it has to be made somewhere, or a break is visible only to whoever is reading the screen.
 
 `1 of the 1` against `0 of the 1` is the whole distinction the library is built around, on your own code, in about a minute. The second one's top-level code ran before anything caught it — which is the honest limit of a check that needs an object to interrogate.
 
@@ -911,7 +1096,12 @@ One file, fully annotated. This is every field that exists.
   "release_ring": "stable",      // how READY it is: stable | beta | experimental
   "entrypoint": "mail.plugin:create_plugin",
                                  // "module:attribute". If the attribute is
-                                 // callable it is called; the result is the plugin.
+                                 // callable it is called; the result is the
+                                 // plugin, and it must report a manifest equal
+                                 // to the "plugin" block below -- check 17.
+                                 // A bare "mail.plugin", with no colon, waives
+                                 // that one check: preflight imports the module
+                                 // and adapts it using this file. See section 6.1.
 
   // ---- what the plugin says it is -------------------------------------
   "plugin": {
@@ -940,6 +1130,8 @@ One file, fully annotated. This is every field that exists.
   }
 }
 ```
+
+Only the `entrypoint` has two legal shapes, and the colon is what separates them. With one, the package states what it is and the gate checks that statement against this file. Without one, this file is the whole statement and there is nothing to check it against — which is the honest shape for a package that has never heard of preflight, and a waiver a reviewer can see, because it is in the file they are already reading. Everything else in this section applies identically either way.
 
 **The registry gates on exactly three fields inside `plugin`:** `plugin_id`, `supported_platforms`, and `tools`. The rest — `permissions`, `data_classes`, `ui_contributions`, `migrations`, `health` — is metadata the *host* reads after a successful load. It is in the model so it is validated and type-checked rather than passed around as a loose dict, and it is documented here so nobody has to wonder why a load-gate carries a health field.
 
@@ -1005,6 +1197,7 @@ Every plugin package prints one line as the very first statement in its `__init_
 python examples/host.py        # or: preflight demo
 ```
 
+<!-- transcript: python examples/host.py | setup=repo -->
 ```
   [greeter] top-level plugin code is executing
   [impostor] top-level plugin code is executing
@@ -1014,7 +1207,7 @@ preflight | plugins\ | 5 packages found
 
   LOADED   greeter     Greeter 1.0.0 - 1 tool
   REFUSED  trespasser  never imported
-                       entrypoint module 'json' resolves to '<your-python>/Lib/json/__init__.py',
+                       entrypoint module 'json' resolves to '<your python's stdlib>/json/__init__.py',
                        which is outside the trusted plugin root '.../examples/plugins'
   REFUSED  collider    never imported
                        tool name collision: 'greeter.hello' is already owned by 'greeter'
@@ -1237,12 +1430,13 @@ This is the command the rest of the section is for.
 preflight settings --as-python
 ```
 
+<!-- transcript: preflight settings --as-python | setup=saved_refuse -->
 ```python
 from preflight import Policy, ToolRisk, load_plugins
 
 result = load_plugins(
     "plugins",
-    allow=["acme.weather"],       # required, and there is no wildcard
+    allow=["acme.weather"],  # required, and there is no wildcard
     policy=Policy(refuse_tool_risks={ToolRisk.FINANCIAL, ToolRisk.WRITE}),
 )
 ```
@@ -1309,7 +1503,7 @@ from pathlib import Path
 from preflight import Policy, ToolRisk, load_plugins
 
 PLUGINS = Path(__file__).resolve().parent / "plugins"
-sys.path.insert(0, str(PLUGINS))        # preflight will not do this for you
+sys.path.insert(0, str(PLUGINS))  # preflight will not do this for you
 
 result = load_plugins(
     PLUGINS,
@@ -1347,12 +1541,12 @@ import os
 from preflight import Policy, ToolRisk, load_plugins
 
 REFUSE = {
-    "strict":  {ToolRisk.FINANCIAL, ToolRisk.WRITE, ToolRisk.DESTRUCTIVE},
-    "normal":  {ToolRisk.FINANCIAL, ToolRisk.DESTRUCTIVE},
-    "dev":     set(),
+    "strict": {ToolRisk.FINANCIAL, ToolRisk.WRITE, ToolRisk.DESTRUCTIVE},
+    "normal": {ToolRisk.FINANCIAL, ToolRisk.DESTRUCTIVE},
+    "dev": set(),
 }
 
-profile = os.environ.get("AGENT_PLUGIN_POLICY", "strict")   # default is strictest
+profile = os.environ.get("AGENT_PLUGIN_POLICY", "strict")  # default is strictest
 result = load_plugins(
     PLUGINS,
     allow=ALLOWED,
@@ -1439,10 +1633,17 @@ had no test, it would not be in this table.
 | 15 | After importing, the module's real `__file__` is re-checked against `trusted_root` | `test_a_module_whose_file_changes_after_resolution_is_still_refused` |
 | 16 | The loaded object actually satisfies the `Plugin` protocol | `test_an_entrypoint_returning_something_other_than_a_plugin_is_refused` |
 | 17 | The manifest the object reports equals the manifest its file declared | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
+| 17w | A **bare entrypoint waives 16 and 17** — the package makes no statement, so there is nothing to check this file against. It waives nothing else: the module is still confined to the trusted root, and the tools the host advertises still come from the file rather than the object | `test_a_bare_entrypoint_is_still_confined_to_the_trusted_root`, `test_the_tool_surface_comes_from_the_file_either_way`, `test_a_colon_entrypoint_is_still_checked_against_what_the_package_reports` |
+| 17r | The waiver is reported, so `LOADED` does not quietly mean two strengths of the same word | `test_the_report_says_a_bare_entrypoint_was_adapted`, `test_the_adapted_module_is_not_modified_by_being_adapted` |
 | 18 | On any refusal the registry is unmodified — no partial registration | asserted in every rejection test above (`registry.available() == ()`) |
 | 19 | Everything handed back out is a deep copy; mutating it cannot reach the registry | `test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions` |
 | 20 | `preflight check` reports on a package without importing it — including one that was importable at the time | `test_inspecting_a_package_never_imports_it`, `test_check_never_imports_the_package_it_is_pointed_at` |
 | 21 | `preflight check` reaches the same verdict as the gate, in the same words — platform and release ring included, not only declared risk | `test_check_refuses_what_the_gate_refuses_and_says_the_same_thing`, `test_check_exits_non_zero_on_a_risk_the_caller_refused` |
+| 21a | A plugin folder named after a module the interpreter already owns is refused by `check` too — verbatim in the gate's words for a built-in, and in `check`'s own words for a pure-Python stdlib name, where the gate's sentence quotes a path only `find_spec` could supply | `test_a_folder_named_after_a_builtin_is_refused_in_the_gates_exact_words`, `test_a_folder_named_after_a_stdlib_module_is_refused_but_not_word_for_word`, `test_a_name_that_only_looks_like_a_stdlib_module_is_still_accepted` |
+| 21b | Deciding a name is unreachable is still a lookup in two frozensets, so `check` keeps its one hard guarantee | `test_calling_a_package_unreachable_still_does_not_import_it` |
+| 21c | `check` verifies the entrypoint's `:attribute` half as well as its module, and reports it apart from the rest because a host reaches it only *after* importing | `test_a_package_with_no_create_plugin_is_refused_by_both`, `test_a_missing_attribute_is_reported_as_costing_the_package_its_import` |
+| 21d | That check reads the syntax tree, so a name bound behind an `if` counts, one bound inside a function does not, and a module that can invent names gets the benefit of the doubt | `test_an_attribute_defined_behind_a_conditional_is_still_found`, `test_an_attribute_only_a_function_body_defines_is_not_found`, `test_a_module_that_can_invent_names_is_given_the_benefit_of_the_doubt` |
+| 21e | Parsing the package's source is not running it | `test_looking_for_the_attribute_does_not_import_the_package` |
 | 22 | Refusing a risk at the gate stops the plugin with its code still inert, and cannot reach a risk that was never declared | `test_refusing_a_declared_risk_stops_the_janitor_before_it_is_imported`, `test_refusing_a_declared_risk_cannot_reach_a_risk_that_was_never_declared` |
 | 23 | A `manifest.json` belonging to another system is reported as such, not as an invalid preflight manifest | `test_another_systems_manifest_is_reported_as_foreign_rather_than_invalid`, `test_a_preflight_manifest_with_a_mistake_in_it_is_invalid_and_not_foreign` |
 
@@ -1508,3 +1709,66 @@ very little of it is gated. The manifest here already speaks that vocabulary (to
 risk levels, permissions) because that is what the original application needed it to
 describe. To be clear about the scope of that claim: this is a plugin trust boundary
 that happens to suit agent tooling, not an agent framework.
+
+---
+
+## 16. Everything `import preflight` gives you
+
+Most hosts need four names. The rest is here so that `dir(preflight)` stops being
+the reference, and so that "internal, don't build on this" is written down rather
+than left to be guessed at.
+
+### The four you need
+
+| Name | What it is |
+|---|---|
+| `load_plugins(directory, allow=..., policy=...)` | The gate. Everything else on this page is in service of this call. |
+| `Policy` | The host's rules, stated in the host's own source. Never read from disk — see §12. |
+| `ToolRisk` | The risk vocabulary, for `Policy(refuse_tool_risks=...)`. |
+| `LoadReport` | What `load_plugins` returns. `.plugins`, `.get(id)`, `.loaded`, `.refused`, `.text()` — §5. |
+
+### The manifest model
+
+These mirror `manifest.json` field for field. You need `PluginManifest` only if
+your package reports its own manifest — the `:attribute` form of the entrypoint
+(§6.1); a package preflight adapts never touches any of them.
+
+| Name | What it is |
+|---|---|
+| `PluginManifest` | The `plugin` block: what one plugin says it is. What your `create_plugin` must return on `.manifest`. |
+| `PluginPackageManifest` | The whole file, `plugin` block included. |
+| `Plugin` | The entire plugin ABI: an object with a `manifest` property. Nothing else. |
+| `Tool`, `ToolSurface` | One declared tool, and whether it is a backend or client surface. |
+| `Visibility`, `ReleaseRing`, `Platform` | The tier and platform vocabularies. |
+| `UIContribution`, `Migration`, `Health`, `HealthState` | Declared metadata: validated, carried through, never enforced. Read them after a load if your host has a use for them. |
+| `MANIFEST_NAME` | `"manifest.json"`. The filename is fixed; this is here so you do not hardcode it. |
+
+### The parts of the gate, for a host that needs them
+
+| Name | What it is |
+|---|---|
+| `PluginRegistry` | What `load_plugins` drives. Use it directly to load manifests one at a time, or to keep a registry across several calls. |
+| `PluginRejected` | The refusal. `load_plugins` catches these and reports them; a direct `PluginRegistry` caller sees them raised. |
+| `RegisteredPlugin` | One loaded plugin: its package manifest, its instance, and where it came from. |
+| `Edition` | Which tiers a build accepts. Prefer `Policy(edition=...)`. |
+| `public_build`, `internal_build`, `development_build` | Pre-configured registries, one per edition. |
+| `Outcome` | One package's result inside a `LoadReport`. `.code_ran` is the field worth knowing. |
+
+### What `preflight check` runs
+
+Public because the command is a thin wrapper over them, and a host that wants to
+build its own review tool should not have to reimplement them.
+
+| Name | What it is |
+|---|---|
+| `inspect_package(folder)` | Read one package. Imports nothing. Returns an `Inspection`. |
+| `inspect_directory(directory)` | The same for a folder of packages, or a single one. |
+| `Inspection` | The result. `.refusals()` for reasons a host would refuse before importing, `.late_refusals()` for the one it can only reach after — §9.1. |
+| `format_inspection(inspection, ...)` | The report `check` prints, as a string. |
+
+### Not part of the API
+
+`preflight.load`, `preflight.registry`, `preflight.manifest`, `preflight.inspect`
+are submodules that appear in `dir(preflight)` because the package imports from
+them. Import the names above from `preflight` itself; anything reachable only by
+reaching into a submodule is internal and may move without notice.

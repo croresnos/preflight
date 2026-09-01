@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_inspect import _manifest, _write_package  # noqa: E402
 
 import preflight
 from preflight.cli import main
@@ -26,15 +27,13 @@ from preflight.load import Policy
 from preflight.manifest import Platform, ToolRisk
 from preflight.registry import Edition
 from preflight.settings import (
+    PROJECT_MARKERS,
     SETTINGS_NAME,
     SettingsError,
     load_settings,
     save_setting,
     user_settings_path,
 )
-
-from test_inspect import _manifest, _write_package  # noqa: E402
-
 
 # `_isolate_user_config` is in conftest.py -- every test file needs it now that
 # `check` reads platform and edition from the same settings, not just this one.
@@ -116,7 +115,7 @@ def test_a_file_dropped_beside_a_package_cannot_reach_down_onto_it(tmp_path):
     """
     root = _project(tmp_path)
     _write_settings(root, {"version": 1, "refuse": ["financial"]})
-    downloads = root / "downloads"          # unpacked, and marked by nothing
+    downloads = root / "downloads"  # unpacked, and marked by nothing
     _write_settings(downloads, {"version": 1, "refuse": []})
     package = downloads / "evil"
     package.mkdir()
@@ -135,7 +134,7 @@ def test_a_hand_made_project_directory_still_governs_what_is_beneath_it(tmp_path
     A project the person made themselves holds its plugins in a subfolder, and
     its settings file is expected to apply to them.
     """
-    root = _project(tmp_path)           # _project marks it with .git
+    root = _project(tmp_path)  # _project marks it with .git
     _write_settings(root, {"version": 1, "refuse": ["financial"]})
     package = root / "plugins" / "widget"
     package.mkdir(parents=True)
@@ -151,7 +150,7 @@ def test_any_project_marker_counts_not_only_git(tmp_path, marker):
     root = tmp_path / "project"
     (root / "plugins").mkdir(parents=True)
     if marker == ".hg":
-        (root / marker).mkdir()      # a directory, like .git
+        (root / marker).mkdir()  # a directory, like .git
     else:
         (root / marker).touch()
     _write_settings(root, {"version": 1, "refuse": ["financial"]})
@@ -180,7 +179,7 @@ def test_a_forged_marker_inside_unpacked_content_is_a_known_limit(tmp_path):
     _write_settings(root, {"version": 1, "refuse": ["financial"]})
     downloads = root / "downloads"
     _write_settings(downloads, {"version": 1, "refuse": []})
-    (downloads / "pyproject.toml").touch()          # shipped in the archive
+    (downloads / "pyproject.toml").touch()  # shipped in the archive
     package = downloads / "evil"
     package.mkdir()
 
@@ -224,7 +223,9 @@ def test_load_plugins_decides_the_same_with_and_without_a_settings_file(
     root = _project(tmp_path)
     monkeypatch.chdir(root)
     _write_package(
-        root, "widget", manifest=_manifest(tools=[{"name": "widget.get", "risk": "read"}])
+        root,
+        "widget",
+        manifest=_manifest(tools=[{"name": "widget.get", "risk": "read"}]),
     )
     monkeypatch.syspath_prepend(str(root))
 
@@ -301,7 +302,9 @@ def test_the_flag_replaces_the_saved_value_rather_than_adding_to_it(
     monkeypatch.chdir(root)
     _write_settings(root, {"version": 1, "refuse": ["financial"]})
     folder = _write_package(
-        root, "widget", manifest=_manifest(tools=[{"name": "widget.pay", "risk": "financial"}])
+        root,
+        "widget",
+        manifest=_manifest(tools=[{"name": "widget.pay", "risk": "financial"}]),
     )
 
     # The saved rule refuses this package.
@@ -495,7 +498,9 @@ def test_an_unwritable_target_fails_with_a_sentence(tmp_path, monkeypatch):
 # --- display and platform -------------------------------------------------
 
 
-def test_where_names_both_files_whether_or_not_they_exist(tmp_path, monkeypatch, capsys):
+def test_where_names_both_files_whether_or_not_they_exist(
+    tmp_path, monkeypatch, capsys
+):
     monkeypatch.chdir(_project(tmp_path))
 
     assert main(["settings", "--where"]) == 0
@@ -540,12 +545,84 @@ def test_the_inside_check_is_case_insensitive_on_windows(tmp_path):
 
 def test_edition_and_platform_round_trip_through_a_file(tmp_path):
     root = _project(tmp_path)
-    _write_settings(
-        root, {"version": 1, "edition": "internal", "platform": "linux"}
-    )
+    _write_settings(root, {"version": 1, "edition": "internal", "platform": "linux"})
 
     settings = load_settings(cwd=root)
 
     assert settings.edition is Edition.INTERNAL
     assert settings.platform is Platform.LINUX
     assert settings.as_policy().platform is Platform.LINUX
+
+
+def _settings_file(directory: Path, **payload) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / SETTINGS_NAME
+    path.write_text(json.dumps({"version": 1, **payload}), encoding="utf-8")
+    return path
+
+
+def test_a_settings_file_inside_the_inspected_package_is_ignored_out_loud(
+    tmp_path, capsys, monkeypatch
+):
+    """The rule the feature's safety rests on, and it had no test.
+
+    A settings file inside the folder being inspected was written by whatever
+    wrote that folder. Reading it would let a package choose the rules it is
+    judged by. It is dropped -- and said out loud, because a rule that silently
+    does not apply is worse than one that never existed.
+    """
+    folder = _write_package(tmp_path, "widget", manifest=_manifest())
+    _settings_file(folder, refuse=["read"])
+    monkeypatch.chdir(folder)
+
+    assert main(["check", "."]) == 0
+    err = capsys.readouterr().err
+
+    assert "ignoring" in err
+    assert "inside the folder being inspected" in err
+    assert "Move it to your project root" in err
+
+
+def test_a_settings_file_above_an_unmarked_directory_names_the_markers(
+    tmp_path, capsys, monkeypatch
+):
+    """ "No sign of having been set up by hand" is true and leaves you stuck.
+
+    The reader is holding a file they wrote on purpose, being told it looks
+    accidental. The remedy is one `touch` and it belongs on the screen, so the
+    message names every marker that would work rather than alluding to them.
+    """
+    workspace = tmp_path / "workspace"
+    _write_package(workspace / "packages", "widget", manifest=_manifest())
+    _settings_file(workspace / "packages", refuse=["read"])
+    monkeypatch.chdir(workspace / "packages")
+
+    assert main(["check", "widget"]) == 0
+    err = capsys.readouterr().err
+
+    assert "nothing" in err and "marks as a project root" in err
+    for marker in PROJECT_MARKERS:
+        assert marker in err, f"the message should name {marker}"
+
+
+def test_marking_the_directory_makes_the_same_file_apply(tmp_path, capsys, monkeypatch):
+    """The other half: the remedy the message gives has to actually work."""
+    workspace = tmp_path / "workspace"
+    packages = workspace / "packages"
+    _write_package(
+        packages,
+        "widget",
+        manifest=_manifest(tools=[{"name": "widget.read", "risk": "read"}]),
+    )
+    _settings_file(packages, refuse=["read"])
+    monkeypatch.chdir(packages)
+
+    assert main(["check", "widget"]) == 0
+    capsys.readouterr()
+
+    (packages / ".preflight-root").touch()
+
+    assert main(["check", "widget"]) == 1
+    out, err = capsys.readouterr()
+    assert "ignoring" not in err
+    assert "a risk you refused" in out

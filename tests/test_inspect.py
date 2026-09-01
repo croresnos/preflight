@@ -13,7 +13,10 @@ import json
 import sys
 from pathlib import Path
 
-from preflight.inspect import inspect_directory, inspect_package
+import pytest
+
+from preflight.inspect import inspect_directory, inspect_package, module_defines
+from preflight.registry import PluginRegistry
 
 TRIPWIRE = "tripwire.log"
 
@@ -219,14 +222,24 @@ def test_a_manifest_problem_is_reported_in_words_and_not_as_a_pydantic_dump(
 def test_inspecting_a_folder_of_packages_resolves_each_against_that_folder(
     tmp_path: Path,
 ):
-    _write_package(tmp_path, "alpha", manifest=_manifest(
-        package_id="example.alpha", plugin_id="alpha",
-        entrypoint="alpha.plugin:create_plugin",
-    ))
-    _write_package(tmp_path, "beta", manifest=_manifest(
-        package_id="example.beta", plugin_id="beta",
-        entrypoint="beta.plugin:create_plugin",
-    ))
+    _write_package(
+        tmp_path,
+        "alpha",
+        manifest=_manifest(
+            package_id="example.alpha",
+            plugin_id="alpha",
+            entrypoint="alpha.plugin:create_plugin",
+        ),
+    )
+    _write_package(
+        tmp_path,
+        "beta",
+        manifest=_manifest(
+            package_id="example.beta",
+            plugin_id="beta",
+            entrypoint="beta.plugin:create_plugin",
+        ),
+    )
 
     inspections = inspect_directory(tmp_path)
 
@@ -283,3 +296,97 @@ def test_inspecting_a_folder_with_nothing_in_it_still_returns_a_result(
 
     assert len(inspections) == 1
     assert inspections[0].has_manifest is False
+
+
+def test_inspection_refuses_an_oversized_manifest_without_reading_it(tmp_path: Path):
+    folder = _write_package(tmp_path, "widget")
+    manifest = folder / "manifest.json"
+    manifest.write_text("x" * (PluginRegistry.MAX_MANIFEST_BYTES + 1), encoding="utf-8")
+
+    inspection = inspect_package(folder)
+
+    assert not inspection.consistent
+    assert "exceeds 262144 bytes" in (inspection.problem or "")
+    assert "was not read" in (inspection.problem or "")
+
+
+def test_invalid_entrypoint_syntax_is_a_late_refusal(tmp_path: Path):
+    folder = _write_package(tmp_path, "widget", manifest=_manifest())
+    (folder / "plugin.py").write_text("def create_plugin(:\n", encoding="utf-8")
+
+    inspection = inspect_package(folder)
+
+    assert inspection.consistent
+    assert inspection.missing_attribute is None
+    assert len(inspection.late_refusals()) == 1
+    assert "invalid Python syntax" in inspection.late_refusals()[0]
+
+
+def test_directory_inspection_reports_cross_package_identity_and_tool_collisions(
+    tmp_path: Path,
+):
+    shared_tool = [{"name": "shared.read", "risk": "read"}]
+    _write_package(
+        tmp_path,
+        "alpha",
+        manifest=_manifest(
+            package_id="example.same", plugin_id="alpha", tools=shared_tool
+        ),
+    )
+    _write_package(
+        tmp_path,
+        "beta",
+        manifest=_manifest(
+            package_id="example.same", plugin_id="beta", tools=shared_tool
+        ),
+    )
+
+    alpha, beta = inspect_directory(tmp_path)
+
+    assert alpha.directory_refusals == ()
+    assert any(
+        "package id 'example.same'" in reason for reason in beta.directory_refusals
+    )
+    assert any(
+        "tool name 'shared.read'" in reason for reason in beta.directory_refusals
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "create_plugin, other = object(), object()\n",
+        "for create_plugin in []:\n    pass\n",
+        "with open(__file__) as create_plugin:\n    pass\n",
+        "try:\n    pass\nexcept Exception as create_plugin:\n    pass\n",
+        "match object():\n    case create_plugin:\n        pass\n",
+        "if (create_plugin := object()):\n    pass\n",
+    ],
+)
+def test_module_binding_analysis_handles_python_binding_forms(
+    tmp_path: Path, source: str
+):
+    module = tmp_path / "plugin.py"
+    module.write_text(source, encoding="utf-8")
+
+    assert module_defines(module, "create_plugin")
+
+
+def test_symlinked_entrypoint_source_outside_the_root_is_refused(tmp_path: Path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("def create_plugin():\n    return None\n", encoding="utf-8")
+    folder = _write_package(
+        tmp_path,
+        "widget",
+        manifest=_manifest(entrypoint="widget.plugin:create_plugin"),
+        module=False,
+    )
+    try:
+        (folder / "plugin.py").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    inspection = inspect_package(folder)
+
+    assert not inspection.consistent
+    assert "resolves outside" in (inspection.problem or "")

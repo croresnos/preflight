@@ -134,7 +134,10 @@ def preload_refusals(
     refused = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
     reasons: list[str] = []
 
-    if package.plugin.supported_platforms and platform not in package.plugin.supported_platforms:
+    if (
+        package.plugin.supported_platforms
+        and platform not in package.plugin.supported_platforms
+    ):
         reasons.append(
             f"package '{package.package_id}' does not support platform "
             f"'{platform.value}'"
@@ -191,7 +194,9 @@ def _module_file(module_name: str) -> Path | None:
     return path.resolve() if path.is_file() else None
 
 
-def _why_unresolvable(module_name: str, root: Path) -> str:
+def _why_unresolvable(
+    module_name: str, root: Path, *, on_sys_path: bool | None = None
+) -> str:
     """Which of several reasons a module has no file, decided from disk.
 
     The refusal this accompanies is correct however it was arrived at, but it
@@ -204,11 +209,18 @@ def _why_unresolvable(module_name: str, root: Path) -> str:
     Path arithmetic and ``sys.path`` only. Nothing here imports or resolves, and
     it runs after the refusal is already decided -- a wrong guess about *why*
     would be a bad diagnosis, never a permission.
+
+    ``on_sys_path`` overrides the third fact. ``preflight check`` runs in a
+    process that has never put the plugin root on the import path and never will,
+    but the host it is predicting necessarily has -- :func:`preflight.load_plugins`
+    refuses to start otherwise. Passing ``True`` asks for the diagnosis that host
+    would be given, rather than a true but useless one about this process.
     """
     parts = module_name.split(".")
     folder = root.joinpath(*parts)
     module_file = root.joinpath(*parts[:-1], f"{parts[-1]}.py")
-    on_sys_path = any(entry and Path(entry).resolve() == root for entry in sys.path)
+    if on_sys_path is None:
+        on_sys_path = any(entry and Path(entry).resolve() == root for entry in sys.path)
 
     if folder.is_dir() and not (folder / "__init__.py").is_file():
         return (
@@ -232,6 +244,53 @@ def _why_unresolvable(module_name: str, root: Path) -> str:
         f"sys.path is answering to '{module_name}' first. Rename the plugin folder "
         f"to a name no installed package already uses."
     )
+
+
+def no_file_refusal(
+    module_name: str, root: Path, *, on_sys_path: bool | None = None
+) -> str:
+    """The gate's refusal for a module that resolves to no file, and why.
+
+    Public and named because two callers must not be able to word it
+    differently. ``preflight check`` cannot ask ``find_spec`` -- on a dotted name
+    that executes the parent package, which is the one thing that command may not
+    do -- but for a name compiled into the interpreter it does not need to: the
+    answer is in ``sys.builtin_module_names``, and the sentence a person reads
+    about it has to be this one. Rewording it here rewords it there.
+    """
+    return (
+        f"entrypoint module '{module_name}' has no file on disk, so it cannot "
+        f"be shown to live inside the trusted plugin root '{root}'\n"
+        f"{_why_unresolvable(module_name, root, on_sys_path=on_sys_path)}"
+    )
+
+
+def interpreter_provides(module_name: str) -> str | None:
+    """Whether this interpreter already answers to the entrypoint's top-level name.
+
+    ``"builtin"`` when the module is compiled in. ``BuiltinImporter`` sits ahead
+    of ``PathFinder`` on ``sys.meta_path``, so the name is taken before any
+    directory is consulted, in every process, whatever a host does to
+    ``sys.path``. A plugin folder by that name can never be reached.
+
+    ``"stdlib"`` when the interpreter ships a module of that name but on disk.
+    That one is conditional, and both of its outcomes are bad: a host that has
+    already imported the name gets the standard library's file back and refuses
+    the package for resolving outside the root; a host that has not gets the
+    plugin folder and imports it *in the standard library's place*, for the rest
+    of the process. Only the first is a refusal, which is why the caller cannot
+    promise which it will be.
+
+    Two frozensets the interpreter carries, read with no import at all. That is
+    what makes this question answerable from :mod:`preflight.inspect`, which may
+    not run a line of the package it is describing.
+    """
+    top = module_name.split(".", 1)[0]
+    if top in sys.builtin_module_names:
+        return "builtin"
+    if top in sys.stdlib_module_names:
+        return "stdlib"
+    return None
 
 
 def _import_entrypoint(
@@ -263,7 +322,7 @@ def _import_entrypoint(
     back. Note that for a dotted entrypoint that moment arrives during
     resolution, not at the import below -- see the loop.
     """
-    module_name, attribute = entrypoint.split(":", 1)
+    module_name, separator, attribute = entrypoint.partition(":")
     root = Path(trusted_root).resolve()
     announced = False
 
@@ -287,11 +346,7 @@ def _import_entrypoint(
             announce()
         located = _module_file(ancestor)
         if located is None:
-            raise PluginRejected(
-                f"entrypoint module '{ancestor}' has no file on disk, so it cannot "
-                f"be shown to live inside the trusted plugin root '{root}'\n"
-                f"{_why_unresolvable(ancestor, root)}"
-            )
+            raise PluginRejected(no_file_refusal(ancestor, root))
         if not located.is_relative_to(root):
             raise PluginRejected(
                 f"entrypoint module '{ancestor}' resolves to '{located}', which is "
@@ -314,8 +369,50 @@ def _import_entrypoint(
             f"which is outside the trusted plugin root '{root}'"
         )
 
+    if not separator:
+        # A bare entrypoint asks for the module itself. It is not a `Plugin` --
+        # a module has no `manifest` -- and making it one is the caller's job,
+        # because the manifest to adapt it with is the caller's to hold. See
+        # `PluginRegistry.register`.
+        return module
+
     exported = getattr(module, attribute)
     return exported() if callable(exported) else exported
+
+
+class _AdaptedModule:
+    """A module presented as a :class:`Plugin`, using the manifest from its file.
+
+    Built only for a bare entrypoint, where the package does not describe itself
+    and the manifest file is the whole description. Everything but ``manifest``
+    is delegated, so a host calls the module's own functions as it would if it
+    had imported the module itself.
+
+    The module is not modified. Attaching a ``manifest`` attribute to it would be
+    shorter and would leave a preflight-shaped mark on a package whose entire
+    premise is that it has never heard of preflight -- visible to anything else
+    that imports it, and to the package's own code.
+    """
+
+    __slots__ = ("_module", "_manifest")
+
+    def __init__(self, module: object, manifest: PluginManifest) -> None:
+        self._module = module
+        self._manifest = manifest
+
+    @property
+    def manifest(self) -> PluginManifest:
+        return self._manifest
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._module, name)
+
+    def __dir__(self) -> list[str]:
+        return sorted({*dir(self._module), "manifest"})
+
+    def __repr__(self) -> str:
+        name = getattr(self._module, "__name__", "?")
+        return f"<preflight-adapted module {name!r}>"
 
 
 class PluginRegistry:
@@ -337,8 +434,11 @@ class PluginRegistry:
         self.allowed_package_ids = frozenset(allowed_package_ids)
         self.refuse_tool_risks = frozenset(ToolRisk(risk) for risk in refuse_tool_risks)
         self.max_manifest_bytes = (
-            self.MAX_MANIFEST_BYTES if max_manifest_bytes is None else max_manifest_bytes
+            self.MAX_MANIFEST_BYTES
+            if max_manifest_bytes is None
+            else max_manifest_bytes
         )
+        self._package_owners: dict[str, str] = {}
         self._by_plugin: dict[str, RegisteredPlugin] = {}
         self._tool_owners: dict[str, str] = {}
         self._tools: dict[str, Tool] = {}
@@ -390,6 +490,12 @@ class PluginRegistry:
             ) from exc
         self._validate_preload_policy(package)
         plugin_id = package.plugin.plugin_id
+        package_owner = self._package_owners.get(package.package_id)
+        if package_owner is not None:
+            raise PluginRejected(
+                f"package '{package.package_id}' is already registered "
+                f"by plugin '{package_owner}'"
+            )
         if plugin_id in self._by_plugin:
             raise PluginRejected(f"plugin '{plugin_id}' is already registered")
         declared_tools: set[str] = set()
@@ -415,39 +521,48 @@ class PluginRegistry:
                 f"failed to load plugin package '{package.package_id}' from {origin}: {exc}"
             ) from exc
 
-        if not isinstance(instance, Plugin):
-            raise PluginRejected(
-                f"entrypoint for '{package.package_id}' does not implement Plugin"
-            )
-        try:
-            runtime_manifest = PluginManifest.model_validate(instance.manifest)
-        except ValidationError as exc:
-            # from_file=False: this came back from the plugin's own code, not off
-            # disk, so "it belongs to another system" is not a verdict available
-            # here -- there is no file for it to belong to.
-            raise PluginRejected(
-                manifest_error_message(
-                    f"runtime manifest for '{package.package_id}' is invalid",
-                    exc,
-                    from_file=False,
+        if package.self_reports_manifest:
+            if not isinstance(instance, Plugin):
+                raise PluginRejected(
+                    f"entrypoint for '{package.package_id}' does not implement Plugin"
                 )
-            ) from exc
-        if runtime_manifest != package.plugin:
-            # Equality is the whole check, but "not equal" is not a whole
-            # message: the reader is left diffing a manifest against a source
-            # file by eye. Both objects are here, so say which fields disagree.
-            refusal = (
-                f"runtime manifest for '{package.package_id}' does not match "
-                "its validated package manifest"
-            )
-            differences = manifest_differences(package.plugin, runtime_manifest)
-            raise PluginRejected("\n".join((refusal, *differences)))
+            try:
+                runtime_manifest = PluginManifest.model_validate(instance.manifest)
+            except ValidationError as exc:
+                # from_file=False: this came back from the plugin's own code, not
+                # off disk, so "it belongs to another system" is not a verdict
+                # available here -- there is no file for it to belong to.
+                raise PluginRejected(
+                    manifest_error_message(
+                        f"runtime manifest for '{package.package_id}' is invalid",
+                        exc,
+                        from_file=False,
+                    )
+                ) from exc
+            if runtime_manifest != package.plugin:
+                # Equality is the whole check, but "not equal" is not a whole
+                # message: the reader is left diffing a manifest against a source
+                # file by eye. Both objects are here, so say which fields disagree.
+                refusal = (
+                    f"runtime manifest for '{package.package_id}' does not match "
+                    "its validated package manifest"
+                )
+                differences = manifest_differences(package.plugin, runtime_manifest)
+                raise PluginRejected("\n".join((refusal, *differences)))
+        else:
+            # A bare entrypoint waives the comparison above, and the branch is
+            # here so that it is waived rather than faked. Adapting the module
+            # and then comparing the result would run a check that cannot fail,
+            # which is worse than running none: it reads like one, in the code
+            # and in the report.
+            instance = _AdaptedModule(instance, package.plugin)
 
         registered = RegisteredPlugin(
             package=package,
             instance=instance,
             origin=origin,
         )
+        self._package_owners[package.package_id] = plugin_id
         self._by_plugin[plugin_id] = registered
         for tool in package.plugin.tools:
             self._tool_owners[tool.name] = plugin_id
@@ -476,7 +591,9 @@ class PluginRegistry:
         try:
             size = path.stat().st_size
         except OSError as exc:
-            raise PluginRejected(f"cannot read plugin manifest '{path}': {exc}") from exc
+            raise PluginRejected(
+                f"cannot read plugin manifest '{path}': {exc}"
+            ) from exc
         if size > self.max_manifest_bytes:
             raise PluginRejected(
                 f"plugin manifest '{path}' exceeds {self.max_manifest_bytes} bytes"
