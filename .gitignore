@@ -1,16 +1,71 @@
+# Python bytecode and packaging output
 __pycache__/
-*.py[cod]
+*.py[codz]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+
+# Test, coverage, lint, and type-checker state
 .pytest_cache/
 .pytest-*/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.hypothesis/
+.tox/
+.nox/
 .mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
 .ruff_cache/
 .pip-audit-cache/
-.release-tmp/
-.omc/
+
+# Virtual environments and local Python installs
 .venv/
 venv/
-build/
-dist/
-*.egg-info/
+env/
+ENV/
+__pypackages__/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+.envrc
+.pypirc
+.netrc
+pip.conf
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Editors and operating-system metadata
+.idea/
+.vscode/
+.vs/
+.DS_Store
+._*
+__MACOSX__/
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# Preflight development and local security state
+.release-tmp/
+.omc/
+.preflight/
+
+# preflight.toml and preflight.lock are intentionally not ignored: project
+# policy and byte-bound dependency state belong in version control.

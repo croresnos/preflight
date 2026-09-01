@@ -59,6 +59,7 @@ packages = ["src/preflight"]
 "examples/plugins" = "preflight/_examples/plugins"
 
 [tool.hatch.build.targets.sdist]
+exclude = ['/scripts/coldstart']
 include = [
     "/src",
     "/tests",
