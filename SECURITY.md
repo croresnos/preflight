@@ -25,3 +25,13 @@ is imported, it has the permissions of the host Python process. Reports that
 show the gate violating its documented pre-import checks are security relevant;
 reports that require post-import isolation describe planned functionality, not
 a guarantee made by 0.7.
+
+Version 0.8.0a1's trust-protocol alpha does not expand that boundary. Its
+`resource-only` runner has no filesystem, network, process-tree, registry,
+credential, device, UI, CPU, RAM, or disk isolation. Its HMAC evidence chain
+detects accidental or out-of-band record changes, but the alpha key is stored
+under the same user account; code already running as that user can replace both
+the key and records. Adversary-resistant audit custody requires the future
+authenticated Blast Chambers service and OS-protected key storage. `preflight
+doctor` reports the guarantees actually available and Standard/Maximum requests
+fail closed.

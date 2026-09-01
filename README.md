@@ -252,6 +252,47 @@ imported.
 **[The full table names the test that proves each row.](docs/MANUAL.md#14-what-it-checks-in-order--and-the-test-for-each)**
 If you doubt a row, run that test; if a row had no test, it would not be in the table.
 
+## Experimental deterministic trust protocol
+
+Version 0.8.0a1 contains the first backend-neutral trust-kernel slice. It is
+local, deterministic, contains no AI, and introduces project opt-in,
+content-addressed lockfiles, exact approval bindings, stable reason codes, and
+integrity-checked evidence stored outside the repository.
+
+```console
+preflight on
+preflight doctor --json
+preflight install ./candidate --project . --entrypoint python -m candidate
+preflight approve --tier resource-only --accept-weaker-isolation
+preflight run --tier resource-only --accept-weaker-isolation
+preflight report --all --json
+```
+
+The command after `--entrypoint` is part of the reviewed identity. Changing the
+artifact, dependency graph, entrypoint, capabilities, policy, sandbox version,
+project, or tier invalidates the approval. A missing artifact refuses too.
+
+`preflight on` means the policy is active; it does not print or imply that the
+project is isolated. This is a protocol alpha, not the Windows Blast Chambers
+alpha. `preflight doctor` is authoritative. Today it reports only
+`resource-only`, which scrubs inherited application credentials and enforces a
+wall-clock timeout. It does **not** enforce filesystem, network, registry,
+process-tree, account, device, UI, CPU, RAM, or disk boundaries. Staging
+therefore exits nonzero after hashing and does not install anything into the
+host. Standard and Maximum requests refuse; there is no silent downgrade and no
+`--force` escape hatch.
+
+The native AppContainer/LPAC Blast Chambers service, Job Object limits,
+quarantined build pipeline, and Hyper-V Maximum backend remain unimplemented.
+Until those land and pass OS-boundary hostile tests, the statement below remains
+the product's security boundary. The exact process and acceptance contract is
+in [the Windows backend design](docs/architecture/WINDOWS_BACKEND.md).
+
+The current evidence HMAC key lives under the same user account as its records.
+It detects ordinary tampering, but code already executing as that user can
+replace both. It is not adversary-proof audit custody; that requires the future
+authenticated service and OS-protected keys.
+
 ## This is not a sandbox
 
 Once a plugin is imported it is ordinary Python running in your process. It can read

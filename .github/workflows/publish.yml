@@ -32,8 +32,14 @@ jobs:
           python -m pip install --upgrade build twine
           SOURCE_DATE_EPOCH=1704067200 python -m build --outdir .build-1
           SOURCE_DATE_EPOCH=1704067200 python -m build --outdir .build-2
-          cmp .build-1/preflight_gate-0.7.0-py3-none-any.whl .build-2/preflight_gate-0.7.0-py3-none-any.whl
-          cmp .build-1/preflight_gate-0.7.0.tar.gz .build-2/preflight_gate-0.7.0.tar.gz
+          python - <<'PY'
+          from pathlib import Path
+
+          first = {path.name: path.read_bytes() for path in Path(".build-1").iterdir()}
+          second = {path.name: path.read_bytes() for path in Path(".build-2").iterdir()}
+          if first != second:
+              raise SystemExit("build artifacts are not byte-for-byte reproducible")
+          PY
           mv .build-1 dist
       - name: Validate archive contents and metadata
         run: python scripts/audit_dist.py dist && python -m twine check dist/*
@@ -77,14 +83,19 @@ jobs:
           path: dist/
       - name: Fetch back the exact TestPyPI wheel and exercise it
         run: |
-          python -m pip download --no-deps --index-url https://test.pypi.org/simple/ preflight-gate==0.7.0 --dest fetched
-          cmp dist/preflight_gate-0.7.0-py3-none-any.whl fetched/preflight_gate-0.7.0-py3-none-any.whl
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          filename="$(basename "$wheel")"
+          version="${filename#preflight_gate-}"
+          version="${version%-py3-none-any.whl}"
+          python -m pip download --no-deps --index-url https://test.pypi.org/simple/ "preflight-gate==${version}" --dest fetched
+          cmp "$wheel" "fetched/$filename"
           python -m venv /tmp/testpypi
           /tmp/testpypi/bin/python -m pip install --upgrade pip
           /tmp/testpypi/bin/python -m pip install pydantic
-          /tmp/testpypi/bin/python -m pip install --no-deps fetched/preflight_gate-0.7.0-py3-none-any.whl
+          /tmp/testpypi/bin/python -m pip install --no-deps "fetched/$filename"
           /tmp/testpypi/bin/preflight --version
           /tmp/testpypi/bin/preflight demo
+          /tmp/testpypi/bin/preflight doctor --json
 
   pypi:
     if: github.event_name == 'release' || inputs.repository == 'pypi'

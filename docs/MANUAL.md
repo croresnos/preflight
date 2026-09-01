@@ -1766,6 +1766,22 @@ build its own review tool should not have to reimplement them.
 | `Inspection` | The result. `.refusals()` for reasons a host would refuse before importing, `.late_refusals()` for the one it can only reach after — §9.1. |
 | `format_inspection(inspection, ...)` | The report `check` prints, as a string. |
 
+### Deterministic trust-platform contracts (experimental)
+
+These immutable, JSON-serializable types define the byte-bound approval and
+backend-neutral policy protocol. They do not imply that the current release
+provides Standard or Maximum isolation; `preflight doctor` is authoritative.
+
+| Name | What it is |
+|---|---|
+| `ArtifactIdentity`, `DependencyGraph` | The acquired bytes and complete content-addressed dependency graph. |
+| `CapabilitySet` | The five user-facing capability groups plus workload profile. |
+| `PolicyDecision`, `ReasonCode` | A deterministic allow/refuse result and its stable machine-readable reasons. |
+| `EvidenceRecord`, `ApprovalGrant` | Integrity-checked local audit history and an exact approval binding. The alpha key is not protected from code already running as the same user. |
+| `IsolationTier`, `BackendCapabilities` | The requested isolation guarantee and what a backend can actually enforce. |
+| `ApprovalRequest`, `ProvenanceRecord` | Versioned records for pending consent and verified or unverified origin evidence. |
+| `trust_json_schema()` | The complete Draft 2020-12 schema bundle also printed by `preflight schema`. |
+
 ### Not part of the API
 
 `preflight.load`, `preflight.registry`, `preflight.manifest`, `preflight.inspect`

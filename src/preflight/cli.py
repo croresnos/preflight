@@ -8,6 +8,11 @@ The stable 0.7 admission-gate commands are::
     preflight try                      # a host and a plugin, to break yourself
     preflight settings                 # stop retyping --refuse on every command
 
+The experimental trust-platform protocol adds project activation, staging,
+byte- and entrypoint-bound approvals, evidence, capability diagnostics, and a
+deliberately weak resource-only runner. ``preflight doctor`` is authoritative:
+this release does not provide Standard or Maximum isolation.
+
 ``check`` is the command you run on something you downloaded and have not read.
 It is safe to point at untrusted code because it never imports it -- see
 :mod:`preflight.inspect`. It is *not* a malware scanner, does not read the
@@ -56,6 +61,7 @@ from preflight.settings import (
     settings_path_for,
     user_settings_path,
 )
+from preflight.trust_cli import add_trust_commands
 
 _NOT_IDENTIFIER = re.compile(r"[^0-9a-zA-Z_]+")
 
@@ -994,13 +1000,15 @@ def build_parser() -> argparse.ArgumentParser:
         prog="preflight",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Decide whether a plugin may load from its manifest alone, "
-            "before any of its code runs."
+            "Deterministic Python plugin admission plus an experimental, "
+            "fail-closed trust-platform protocol."
         ),
         epilog=(
-            "These commands are for the moment you adopt a package you did not\n"
-            "write. They are not the product, and running one protects nothing\n"
-            "later -- none of this is running when your application is.\n"
+            "check/create/demo/try/settings exercise the stable manifest gate; the\n"
+            "gate itself still belongs inside the host application. The trust\n"
+            "protocol commands are experimental and report only guarantees the\n"
+            "selected backend can enforce. Run `preflight doctor` before relying\n"
+            "on an isolation tier.\n"
             "\n"
             "The gate itself goes inside your program and runs at every startup:\n"
             "\n"
@@ -1017,6 +1025,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the installed version and exit",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    add_trust_commands(commands)
+
     check = commands.add_parser(
         "check",
         help="read a package's manifest and declared tools. Executes nothing.",

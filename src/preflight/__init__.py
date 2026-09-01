@@ -71,6 +71,20 @@ from preflight.registry import (
     internal_build,
     public_build,
 )
+from preflight.trust import (
+    ApprovalGrant,
+    ApprovalRequest,
+    ArtifactIdentity,
+    BackendCapabilities,
+    CapabilitySet,
+    DependencyGraph,
+    EvidenceRecord,
+    IsolationTier,
+    PolicyDecision,
+    ProvenanceRecord,
+    ReasonCode,
+    trust_json_schema,
+)
 
 __all__ = [
     # front door
@@ -107,6 +121,19 @@ __all__ = [
     "public_build",
     "internal_build",
     "development_build",
+    # deterministic trust-platform types
+    "ArtifactIdentity",
+    "DependencyGraph",
+    "CapabilitySet",
+    "PolicyDecision",
+    "ReasonCode",
+    "EvidenceRecord",
+    "ApprovalGrant",
+    "ApprovalRequest",
+    "IsolationTier",
+    "BackendCapabilities",
+    "ProvenanceRecord",
+    "trust_json_schema",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.8.0a1"

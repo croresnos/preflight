@@ -7,6 +7,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .pip-audit-cache/
+.release-tmp/
 .omc/
 .venv/
 venv/
