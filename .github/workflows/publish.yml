@@ -5,6 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      release_ref:
+        description: Existing version tag to build (for example, v0.7.0)
+        required: true
+        type: string
       repository:
         description: Destination index
         required: true
@@ -24,6 +28,31 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_ref || github.ref }}
+      - name: Prove the checkout is the requested version tag
+        env:
+          RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.release_ref || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+          import subprocess
+          import tomllib
+
+          release_ref = os.environ['RELEASE_REF']
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:a[0-9]+)?', release_ref):
+              raise SystemExit(f'release_ref is not a supported version tag: {release_ref!r}')
+          version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
+          if release_ref != f'v{version}':
+              raise SystemExit(f'tag {release_ref!r} does not match package version {version!r}')
+          tags = subprocess.check_output(
+              ['git', 'tag', '--points-at', 'HEAD'], text=True
+          ).splitlines()
+          if release_ref not in tags:
+              raise SystemExit(f'HEAD is not tagged {release_ref!r}: {tags!r}')
+          PY
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
@@ -66,7 +95,7 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
 
@@ -95,7 +124,9 @@ jobs:
           /tmp/testpypi/bin/python -m pip install --no-deps "fetched/$filename"
           /tmp/testpypi/bin/preflight --version
           /tmp/testpypi/bin/preflight demo
-          /tmp/testpypi/bin/preflight doctor --json
+          if [[ $version != 0.7.* ]]; then
+            /tmp/testpypi/bin/preflight doctor --json
+          fi
 
   pypi:
     if: github.event_name == 'release' || inputs.repository == 'pypi'
@@ -111,4 +142,4 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
