@@ -102,6 +102,15 @@ class Ignored:
 
     path: Path
     reason: str
+    #: What the reader can do about it. Carried per rejection rather than
+    #: appended by the caller, because the two rejections have different
+    #: remedies: a file *inside* the inspected folder has to move, and a file
+    #: *above* it is already where it belongs and needs the directory marked.
+    #: One shared tail could only ever be right about one of them.
+    remedy: str = (
+        "preflight is not configured by the thing it is inspecting.\n"
+        "           Move it to your project root to have it apply."
+    )
 
 
 @dataclass(frozen=True)
@@ -392,15 +401,29 @@ def load_settings(
             return True
         if _is_inside(path, target):
             ignored.append(
-                Ignored(path, "it is inside the folder being inspected")
+                Ignored(
+                    path,
+                    "it is inside the folder being inspected, so it is in the "
+                    "hands of\n           whatever put it there",
+                )
             )
             return False
         if _is_inside(target, path.parent) and not is_project_root(path.parent):
+            # Naming the markers rather than alluding to them. "No sign of
+            # having been set up by hand" is true and unactionable: the reader
+            # is holding a file they wrote on purpose, being told it looks
+            # accidental, with nothing to do about it. The remedy is one
+            # `touch`, and it belongs on the screen where the problem is.
+            markers = ", ".join(PROJECT_MARKERS)
             ignored.append(
                 Ignored(
                     path,
                     "it sits above the folder being inspected, in a directory "
-                    "with no sign\n           of having been set up by hand",
+                    "nothing\n           marks as a project root",
+                    remedy=(
+                        f"A project root here is any of: {markers}.\n"
+                        f"           Create one of those and this file applies."
+                    ),
                 )
             )
             return False
@@ -423,9 +446,7 @@ def load_settings(
         block = profiles.get(profile)
         if block is None:
             known = ", ".join(sorted(profiles)) or "none are defined"
-            raise SettingsError(
-                f"no profile named '{profile}'. Available: {known}"
-            )
+            raise SettingsError(f"no profile named '{profile}'. Available: {known}")
         _apply(
             block,
             values,
@@ -481,7 +502,9 @@ def save_setting(
         )
 
     path = settings_path_for(scope, cwd=cwd)
-    document: dict[str, Any] = _read(path) if path.is_file() else {"version": SETTINGS_VERSION}
+    document: dict[str, Any] = (
+        _read(path) if path.is_file() else {"version": SETTINGS_VERSION}
+    )
     document.setdefault("version", SETTINGS_VERSION)
 
     if profile is not None:

@@ -13,16 +13,14 @@ never resolve.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 
 import pytest
+from test_inspect import _manifest, _write_package  # noqa: E402
 
 from preflight import __version__
 from preflight.cli import _example_plugins, main
-
-from test_inspect import _manifest, _write_package  # noqa: E402
 
 
 def test_version_reports_the_installed_version_without_a_subcommand(capsys):
@@ -93,7 +91,9 @@ def test_check_exits_non_zero_when_a_package_would_be_refused(tmp_path, capsys):
     assert "would be refused" in capsys.readouterr().out
 
 
-def test_check_never_imports_the_package_it_is_pointed_at(tmp_path, capsys, monkeypatch):
+def test_check_never_imports_the_package_it_is_pointed_at(
+    tmp_path, capsys, monkeypatch
+):
     folder = _write_package(tmp_path, "widget", manifest=_manifest())
     monkeypatch.syspath_prepend(str(tmp_path))
 
@@ -112,7 +112,10 @@ def test_check_on_a_package_with_no_manifest_says_so_and_points_at_create(
     out = capsys.readouterr().out
     assert "no manifest.json found" in out
     assert "it is the absence of one" in out
-    assert "preflight create widget" in out
+    # The whole path, not the basename. This line is copied and run, and the
+    # reader is not necessarily standing in the parent directory -- they were
+    # not required to be to run the command that printed it.
+    assert f"preflight create {folder}" in out
 
 
 def test_check_on_another_systems_manifest_says_whose_it_is_and_stays_short(
@@ -237,9 +240,7 @@ def test_refuse_accepts_a_comma_separated_list_and_repetition_alike(tmp_path, ca
     assert capsys.readouterr().out == comma
 
 
-def test_refuse_rejects_an_unknown_risk_name_and_lists_the_valid_ones(
-    tmp_path, capsys
-):
+def test_refuse_rejects_an_unknown_risk_name_and_lists_the_valid_ones(tmp_path, capsys):
     folder = _write_package(tmp_path, "widget", manifest=_manifest())
 
     with pytest.raises(SystemExit) as exit_info:
@@ -338,6 +339,37 @@ def test_create_accepts_an_awkward_folder_name_when_given_an_explicit_entrypoint
     assert main(["create", str(folder), "--entrypoint", "elsewhere.plugin:build"]) == 0
     written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     assert written["entrypoint"] == "elsewhere.plugin:build"
+
+
+def test_create_refuses_a_numeric_folder_instead_of_writing_invalid_identifiers(
+    tmp_path, capsys
+):
+    folder = tmp_path / "123"
+    folder.mkdir()
+
+    assert main(["create", str(folder)]) == 2
+    assert not (folder / "manifest.json").exists()
+    assert "123  ->  plugin_123" in capsys.readouterr().err
+
+
+def test_create_rejects_adapter_with_an_explicit_entrypoint(tmp_path):
+    folder = tmp_path / "widget"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "create",
+                str(folder),
+                "--adapter",
+                "--entrypoint",
+                "widget",
+            ]
+        )
+
+    assert exit_info.value.code == 2
+    assert not (folder / "manifest.json").exists()
 
 
 def test_demo_loads_two_plugins_and_refuses_three(capsys):
@@ -445,7 +477,9 @@ def test_try_sandbox_manifest_and_runtime_manifest_agree(tmp_path, capsys):
     capsys.readouterr()
 
     package = root / "plugins" / "weather"
-    on_disk = json.loads((package / "manifest.json").read_text(encoding="utf-8"))["plugin"]
+    on_disk = json.loads((package / "manifest.json").read_text(encoding="utf-8"))[
+        "plugin"
+    ]
     source = (package / "plugin.py").read_text(encoding="utf-8")
 
     assert on_disk["module_version"] in source
@@ -453,22 +487,48 @@ def test_try_sandbox_manifest_and_runtime_manifest_agree(tmp_path, capsys):
     assert on_disk["tools"][0]["name"] in source
 
 
-def test_try_prints_break_commands_that_would_actually_bite(tmp_path, capsys):
-    # The three breaks are printed as commands to paste, so a rename anywhere
-    # in the sandbox templates turns them into no-ops that appear to work and
-    # refuse nothing -- the worst possible outcome for a teaching command.
+@pytest.mark.parametrize("number", ["1", "2", "3"])
+def test_every_break_actually_breaks_the_sandbox_and_its_undo_restores_it(
+    tmp_path, capsys, number
+):
+    """Run each exercise the way the reader does, and check the state moved.
+
+    ``break.py`` edits ``manifest.json`` and ``plugin.py`` by matching literal
+    strings in them. A rename on either side turns a break into a no-op that
+    prints success and refuses nothing -- a teaching command teaching that
+    everything is fine. Asserting the substrings appear in the printed
+    instructions cannot catch that, because both sides would still say the same
+    wrong thing. Running it can.
+    """
     root = tmp_path / "sandbox"
     assert main(["try", str(root)]) == 0
-    out = capsys.readouterr().out
+    assert "python break.py 1" in capsys.readouterr().out
 
-    package = root / "plugins" / "weather"
-    assert (package / "__init__.py").is_file()
-    assert "weather.plugin" in (package / "manifest.json").read_text(encoding="utf-8")
-    assert '"1.0.0"' in (package / "plugin.py").read_text(encoding="utf-8")
+    def run(script, *arguments):
+        return subprocess.run(
+            [sys.executable, str(root / script), *arguments],
+            capture_output=True,
+            text=True,
+            cwd=str(root),
+        )
 
-    assert out.count("python host.py") == 4  # one to run it, one per break
-    expected = "Remove-Item" if os.name == "nt" else "rm "
-    assert expected in out
+    before = (root / "plugins" / "weather").rglob("*")
+    before = {path.name: path.read_bytes() for path in before if path.is_file()}
+    assert run("host.py").returncode == 0
+
+    broken = run("break.py", number)
+    assert broken.returncode == 0, broken.stderr
+    assert "nothing to do" not in broken.stdout  # the no-op this test exists for
+
+    refused = run("host.py")
+    assert refused.returncode == 1, "the break did not change the verdict"
+    assert "REFUSED" in refused.stdout
+
+    assert run("break.py", number, "--undo").returncode == 0
+    restored = run("host.py")
+    assert restored.returncode == 0
+    after = (root / "plugins" / "weather").rglob("*")
+    assert {p.name: p.read_bytes() for p in after if p.is_file()} == before
 
 
 def test_try_sandbox_survives_a_break_and_its_undo(tmp_path, capsys):
@@ -483,9 +543,11 @@ def test_try_sandbox_survives_a_break_and_its_undo(tmp_path, capsys):
 
     host = root / "host.py"
     plugin = root / "plugins" / "weather" / "plugin.py"
-    run = lambda: subprocess.run(  # noqa: E731
-        [sys.executable, str(host)], capture_output=True, text=True, cwd=str(root)
-    ).stdout
+
+    def run():
+        return subprocess.run(
+            [sys.executable, str(host)], capture_output=True, text=True, cwd=str(root)
+        ).stdout
 
     assert "1 loaded, 0 refused" in run()
 
@@ -497,19 +559,52 @@ def test_try_sandbox_survives_a_break_and_its_undo(tmp_path, capsys):
     assert "1 loaded, 0 refused" in run()
 
 
-def test_try_refuses_a_folder_that_is_not_empty(tmp_path, capsys):
-    # Writing host.py over somebody's host.py is the one irreversible thing
-    # this command could do.
+def test_try_will_not_take_over_a_folder_it_did_not_write_even_with_force(
+    tmp_path, capsys
+):
+    """``--force`` resets a sandbox. There is no flag that overwrites your work.
+
+    Overwriting somebody's own ``host.py`` is the one irreversible thing this
+    command could do, so the guarantee is the absence of an escape hatch rather
+    than a scarier message on one. The test passes ``--force`` for that reason:
+    a version that refuses without it and yields to it would satisfy every other
+    assertion here.
+    """
     root = tmp_path / "sandbox"
     root.mkdir()
     (root / "host.py").write_text("mine\n", encoding="utf-8")
 
     assert main(["try", str(root)]) == 2
-    assert (root / "host.py").read_text(encoding="utf-8") == "mine\n"
-    assert "already exists and is not empty" in capsys.readouterr().err
+    assert "files preflight did not write" in capsys.readouterr().err
 
-    assert main(["try", str(root), "--force"]) == 0
-    assert (root / "host.py").read_text(encoding="utf-8") != "mine\n"
+    assert main(["try", str(root), "--force"]) == 2
+    assert "files preflight did not write" in capsys.readouterr().err
+    assert (root / "host.py").read_text(encoding="utf-8") == "mine\n"
+    assert not (root / "plugins").exists()
+
+
+def test_try_requires_its_marker_even_when_a_folder_mimics_the_demo_shape(
+    tmp_path, capsys
+):
+    root = tmp_path / "sandbox"
+    package = root / "plugins" / "weather"
+    package.mkdir(parents=True)
+    (root / "host.py").write_text("mine\n", encoding="utf-8")
+    (package / "manifest.json").write_text("{}", encoding="utf-8")
+
+    assert main(["try", str(root), "--force"]) == 2
+    assert "files preflight did not write" in capsys.readouterr().err
+    assert (root / "host.py").read_text(encoding="utf-8") == "mine\n"
+
+
+def test_try_refuses_to_reset_after_unrelated_files_are_added(tmp_path, capsys):
+    root = tmp_path / "sandbox"
+    assert main(["try", str(root)]) == 0
+    capsys.readouterr()
+    (root / "notes.txt").write_text("mine\n", encoding="utf-8")
+
+    assert main(["try", str(root), "--force"]) == 2
+    assert (root / "notes.txt").read_text(encoding="utf-8") == "mine\n"
 
 
 def test_try_offers_to_reset_a_sandbox_it_wrote_itself(tmp_path, capsys):
@@ -549,3 +644,102 @@ def test_try_does_not_touch_sys_path(tmp_path, capsys):
     assert main(["try", str(tmp_path / "sandbox")]) == 0
     capsys.readouterr()
     assert sys.path == before
+
+
+def test_create_points_at_a_create_plugin_that_is_actually_there(tmp_path, capsys):
+    """The guess has to read the file, because the wrong guess was the default.
+
+    `create` used to write `<pkg>.plugin:create_plugin` whenever a `plugin.py`
+    existed, without looking inside it. For a package that had never heard of
+    preflight -- the case the command exists for -- that named an attribute
+    nothing defined, and produced a manifest that passed `check` and was refused
+    at startup.
+    """
+    folder = tmp_path / "widget"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("", encoding="utf-8")
+    (folder / "plugin.py").write_text(
+        "def create_plugin():\n    return None\n", encoding="utf-8"
+    )
+
+    assert main(["create", str(folder)]) == 0
+    written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+
+    assert written["entrypoint"] == "widget.plugin:create_plugin"
+    assert main(["check", str(folder)]) == 0
+
+
+def test_create_writes_a_bare_entrypoint_for_a_package_that_defines_no_such_thing(
+    tmp_path, capsys
+):
+    """The drag-and-drop case: a folder of ordinary Python, gated in one command.
+
+    Nothing in this package points back at preflight, so there is no attribute to
+    name and no second statement for the gate to check the manifest against. The
+    manifest says so by leaving the colon off, and the command says so on screen
+    rather than leaving it to be inferred.
+    """
+    folder = tmp_path / "widget"
+    folder.mkdir()
+    (folder / "__init__.py").write_text(
+        "def jot(text):\n    return text\n", encoding="utf-8"
+    )
+
+    assert main(["create", str(folder)]) == 0
+    out = capsys.readouterr().out
+    written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+
+    assert written["entrypoint"] == "widget"
+    assert "does not report its own manifest" in out
+    assert main(["check", str(folder)]) == 0
+
+
+def test_create_adapter_writes_a_stub_that_the_gate_will_check(tmp_path, capsys):
+    """`--adapter` buys back the runtime-manifest comparison, and costs the duplication.
+
+    The stub has to agree with the manifest written beside it in the same run, or
+    the command has shipped a package that cannot load -- so this asserts the two
+    files agree by loading them, not by comparing strings.
+    """
+    folder = tmp_path / "widget"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("", encoding="utf-8")
+
+    assert main(["create", str(folder), "--adapter"]) == 0
+    capsys.readouterr()
+
+    written = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    assert written["entrypoint"] == "widget.plugin:create_plugin"
+    assert (folder / "plugin.py").is_file()
+    assert main(["check", str(folder)]) == 0
+
+    report = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]);"
+            "from preflight import load_plugins;"
+            "r = load_plugins(sys.argv[1], allow=['local.widget']);"
+            "print(r); sys.exit(1 if r.refused else 0)",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert report.returncode == 0, report.stdout + report.stderr
+
+
+def test_create_adapter_will_not_overwrite_a_plugin_py_that_is_already_there(
+    tmp_path, capsys
+):
+    # The same rule `try` follows: preflight writes manifests over manifests,
+    # and never somebody's Python over somebody's Python.
+    folder = tmp_path / "widget"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("", encoding="utf-8")
+    (folder / "plugin.py").write_text("mine\n", encoding="utf-8")
+
+    assert main(["create", str(folder), "--adapter"]) == 2
+    assert "will not overwrite your Python" in capsys.readouterr().err
+    assert (folder / "plugin.py").read_text(encoding="utf-8") == "mine\n"
+    assert not (folder / "manifest.json").exists()

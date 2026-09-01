@@ -31,8 +31,8 @@ Importing a Python module runs it. So a loader that imports a plugin in order to
 find out what it is has already let it do whatever it was going to do:
 
 ```python
-module = importlib.import_module(plugin_name)   # <-- the plugin's code has now run
-if module.MANIFEST["version"] not in SUPPORTED: # <-- too late
+module = importlib.import_module(plugin_name)  # <-- the plugin's code has now run
+if module.MANIFEST["version"] not in SUPPORTED:  # <-- too late
     raise RuntimeError("unsupported plugin")
 ```
 
@@ -48,6 +48,7 @@ pip install preflight-gate
 preflight demo
 ```
 
+<!-- transcript: preflight demo | setup=repo -->
 ```
   [greeter] top-level plugin code is executing
   [impostor] top-level plugin code is executing
@@ -57,16 +58,25 @@ preflight | plugins\ | 5 packages found
 
   LOADED   greeter     Greeter 1.0.0 - 1 tool
   REFUSED  trespasser  never imported
-                       entrypoint module 'json' resolves to '<python>\Lib\json\__init__.py',
+                       entrypoint module 'json' resolves to '<your python's stdlib>/json/__init__.py',
                        which is outside the trusted plugin root '<root>'
   REFUSED  collider    never imported
                        tool name collision: 'greeter.hello' is already owned by 'greeter'
   REFUSED  impostor    imported, then rejected
                        runtime manifest for 'example.impostor' does not match its
                        validated package manifest
+                       tools -- undeclared in the manifest: impostor.purge_all_records
   LOADED   janitor     Janitor 1.0.0 - 1 tool
 
   2 loaded, 3 refused -- 2 of the 3 stopped before any of their code ran
+
+  The 3 lines above reading `top-level plugin code is executing` are
+  tripwires: the first statement in a plugin package. 2 of the 3 refused
+  plugins never printed one, because they never got an import.
+
+  Try `preflight demo --refuse destructive` to watch a fourth
+  plugin refused for a tool it declared honestly -- and the one
+  that lied slip past the flag, because it declared nothing.
 ```
 
 Each example plugin prints a tripwire as the first statement of its `__init__.py`.
@@ -226,6 +236,15 @@ before it has cleared the boundary.
 | 15–17 | The module's real `__file__` is re-checked, the object satisfies the `Plugin` protocol, and the manifest it reports equals the one its file declared |
 | 18–19 | On any refusal the registry is unmodified, and everything handed back is a deep copy |
 
+Rows 16–17 are the only ones a package can be excused from, and only by asking in
+writing: an `entrypoint` naming a module and no attribute says *this file is the
+whole description*, preflight adapts the module using it, and there is no second
+statement left to compare against. Nothing else changes, the report says
+`(adapted; manifest not self-reported)` on every such plugin, and
+[MANUAL §6.1](docs/MANUAL.md#61-the-entrypoint-has-two-shapes-and-this-is-the-one-that-matters-here)
+explains when to want it — chiefly, gating a package that has never heard of
+preflight, which was never going to satisfy row 17 anyway.
+
 Rows 15–17 are what is left over — checks that *cannot* be made before the import,
 because they are about an object, and there is no object until something has been
 imported.
@@ -259,7 +278,7 @@ chose to run has the run of the place. Most projects have neither.
 
 - Anything a plugin does after it loads. See the section above; it is not a footnote.
 - A compromised trusted root. Write access to that directory is write access to your process. Everything here assumes you own it.
-- A malicious or careless host. `load_manifest_file` accepts a custom `importer`, and a host that supplies its own has opted out of entrypoint confinement — deliberately, and it owns that decision.
+- A malicious or careless host. `PluginRegistry.load_manifest_file` accepts a custom `importer`, and a host that supplies its own has opted out of entrypoint confinement — deliberately, and it owns that decision.
 - Supply-chain compromise of a plugin you allowlisted. preflight checks that a plugin is what it says it is; it has no opinion on whether you should have trusted it.
 - Denial of service. A plugin that hangs at import time hangs your process.
 

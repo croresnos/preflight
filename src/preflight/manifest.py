@@ -15,7 +15,7 @@ from __future__ import annotations
 import textwrap
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Mapping, Protocol, runtime_checkable
 
 from pydantic import (
     BaseModel,
@@ -117,6 +117,15 @@ class PluginManifest(ContractModel):
     migrations: list[Migration] = Field(default_factory=list)
     health: Health = Field(default_factory=Health)
 
+    @model_validator(mode="after")
+    def tool_names_are_unique(self):
+        names: set[str] = set()
+        for tool in self.tools:
+            if tool.name in names:
+                raise ValueError(f"duplicate tool name '{tool.name}'")
+            names.add(tool.name)
+        return self
+
 
 class Visibility(str, Enum):
     """Who a plugin is for."""
@@ -168,18 +177,48 @@ class PluginPackageManifest(ContractModel):
 
         Shape is not location. Nothing here constrains *where* the named module
         lives; see ``preflight.registry._import_entrypoint`` for that.
+
+        Two shapes are legal, and the colon is what distinguishes them --
+        see :attr:`self_reports_manifest`, which is the only thing that reads
+        the difference.
         """
         module_name, separator, attribute = value.partition(":")
         module_parts = module_name.split(".")
         if (
-            separator != ":"
-            or not module_name
-            or not attribute
-            or not _is_public_identifier(attribute)
+            not module_name
+            or (separator == ":" and not _is_public_identifier(attribute))
+            or (separator != ":" and attribute)
             or any(not _is_public_identifier(part) for part in module_parts)
         ):
-            raise ValueError("entrypoint must use public.module:attribute syntax")
+            raise ValueError(
+                "entrypoint must be public.module:attribute, or public.module "
+                "alone to have preflight adapt the module from this file"
+            )
         return value
+
+    @property
+    def self_reports_manifest(self) -> bool:
+        """Whether the plugin's own code states what it is, to be checked against this.
+
+        ``True`` -- the usual form -- means the entrypoint names an attribute,
+        that attribute yields an object, and the object's ``manifest`` property
+        must equal the ``plugin`` block here. Two people wrote those two things
+        down separately and the registry requires them to agree; that agreement
+        is the only reason the comparison means anything.
+
+        ``False`` means the entrypoint names a module and nothing else. preflight
+        adapts the module using the ``plugin`` block below, so there is no second
+        statement to compare against and the check is waived, not passed. This is
+        the honest shape for a package that has never heard of preflight -- it
+        was never going to return a ``PluginManifest`` -- and it is a waiver the
+        reviewer can see, because it is in the file they are already reading.
+
+        Nothing else changes. The manifest is still confined to the trusted root,
+        the module is still resolved to a file inside it before anything is
+        imported, and the tool surface the host advertises still comes from this
+        file rather than from the object.
+        """
+        return ":" in self.entrypoint
 
     @model_validator(mode="after")
     def restricted_plugins_cannot_claim_the_stable_ring(self):
@@ -192,7 +231,9 @@ class PluginPackageManifest(ContractModel):
             self.visibility is Visibility.RESTRICTED
             and self.release_ring is ReleaseRing.STABLE
         ):
-            raise ValueError("restricted plugins cannot declare the stable release ring")
+            raise ValueError(
+                "restricted plugins cannot declare the stable release ring"
+            )
         return self
 
 
@@ -218,7 +259,7 @@ def _required_fields() -> tuple[str, ...]:
     )
 
 
-def _where(error: dict) -> str:
+def _where(error: Mapping[str, Any]) -> str:
     """The dotted path to the field an error is about."""
     return ".".join(str(part) for part in error["loc"]) or "(the file itself)"
 
@@ -285,7 +326,9 @@ def explain_manifest_error(
     return "\n".join(lines), False
 
 
-def manifest_error_message(prefix: str, exc: Exception, *, from_file: bool = True) -> str:
+def manifest_error_message(
+    prefix: str, exc: Exception, *, from_file: bool = True
+) -> str:
     """``prefix``, then the explanation -- on one line when it fits on one.
 
     The refusals this builds are read in two places with different shapes: raw,
@@ -310,7 +353,11 @@ def _by_name(value: object) -> dict[str, object] | None:
         isinstance(item, dict) and isinstance(item.get("name"), str) for item in value
     ):
         return None
-    return {str(item["name"]): item for item in value}  # type: ignore[index]
+    by_name: dict[str, object] = {}
+    for item in value:
+        if isinstance(item, dict):
+            by_name[str(item["name"])] = item
+    return by_name
 
 
 def _brief(value: object) -> str:

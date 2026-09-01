@@ -28,6 +28,13 @@ code matches what the manifest claims.
 """
 
 # --- the front door: what almost every host needs -------------------------
+# --- inspection: reading a package without running it ---------------------
+from preflight.inspect import (
+    Inspection,
+    format_inspection,
+    inspect_directory,
+    inspect_package,
+)
 from preflight.load import (
     MANIFEST_NAME,
     LoadReport,
@@ -36,15 +43,8 @@ from preflight.load import (
     load_plugins,
 )
 
-# --- inspection: reading a package without running it ---------------------
-from preflight.inspect import (
-    Inspection,
-    format_inspection,
-    inspect_directory,
-    inspect_package,
-)
-
 # --- the manifest schema: what a plugin author writes ---------------------
+# --- release tiers: opt-in, and unnecessary for a single-tier host ---------
 from preflight.manifest import (
     Health,
     HealthState,
@@ -53,23 +53,20 @@ from preflight.manifest import (
     Plugin,
     PluginManifest,
     PluginPackageManifest,
+    ReleaseRing,
     Tool,
     ToolRisk,
     ToolSurface,
     UIContribution,
+    Visibility,
 )
 
 # --- the gate itself, and its refusal -------------------------------------
 from preflight.registry import (
+    Edition,
     PluginRegistry,
     PluginRejected,
     RegisteredPlugin,
-)
-
-# --- release tiers: opt-in, and unnecessary for a single-tier host ---------
-from preflight.manifest import ReleaseRing, Visibility
-from preflight.registry import (
-    Edition,
     development_build,
     internal_build,
     public_build,
@@ -112,4 +109,4 @@ __all__ = [
     "development_build",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

@@ -68,7 +68,9 @@ def _write_plugin(
         encoding="utf-8",
     )
     directory.joinpath("plugin.py").write_text(
-        _PLUGIN_PY.format(plugin_id=plugin_id, name=folder.title(), tool=tool, risk=risk),
+        _PLUGIN_PY.format(
+            plugin_id=plugin_id, name=folder.title(), tool=tool, risk=risk
+        ),
         encoding="utf-8",
     )
     directory.joinpath("manifest.json").write_text(

@@ -218,7 +218,7 @@ def _refusal_for(root: Path, entrypoint: str) -> str:
 def test_a_folder_without_an_init_is_told_it_is_a_folder_without_an_init(
     tmp_path: Path, monkeypatch
 ):
-    """"No file on disk" is true of four different mistakes. Say which.
+    """ "No file on disk" is true of four different mistakes. Say which.
 
     This is the most likely refusal a first-timer sees, and on its own it names
     the check that failed rather than the thing they did. The check is doing the

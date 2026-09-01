@@ -31,12 +31,12 @@ jobs:
         # is inside an inspected folder with `os.path.normcase`, and resolves the
         # user config directory from `%APPDATA%`. Neither branch runs anywhere
         # else, and both are load-bearing for the settings threat model.
-        os: [ubuntu-latest, windows-latest]
-        python: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -47,43 +47,116 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
-  wheel:
-    name: demo from a built wheel
+  quality:
+    name: deterministic quality and security gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m mypy
+      - run: python -m bandit -q -r src
+      - run: python -m pip_audit .
+      - run: python -m pytest --cov --cov-report=term-missing -q
 
-      - uses: actions/setup-python@v5
+  build:
+    name: reproducible, inspected distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Build
-        run: python -m pip install --upgrade pip build && python -m build --wheel
-
-      - name: Install the wheel into a clean environment
-        # Deliberately not an editable install and deliberately not the checkout:
-        # the point is to exercise what a stranger gets from `pip install`.
         run: |
-          python -m venv /tmp/fresh
-          /tmp/fresh/bin/python -m pip install --upgrade pip
-          /tmp/fresh/bin/python -m pip install dist/*.whl
+          python -m pip install --upgrade pip build twine
+          SOURCE_DATE_EPOCH=1704067200 python -m build --outdir .build-1
+          SOURCE_DATE_EPOCH=1704067200 python -m build --outdir .build-2
+          cmp .build-1/preflight_gate-0.7.0-py3-none-any.whl .build-2/preflight_gate-0.7.0-py3-none-any.whl
+          cmp .build-1/preflight_gate-0.7.0.tar.gz .build-2/preflight_gate-0.7.0.tar.gz
+          mv .build-1 dist
 
-      - name: The console script exists and answers
-        run: /tmp/fresh/bin/preflight --version
+      - name: Audit distributions
+        run: python -m twine check dist/* && python scripts/audit_dist.py dist
 
-      - name: The examples shipped, so the demo runs with no clone
-        # Run from `/` so a working directory containing this repository cannot
-        # be what makes it work.
-        working-directory: /
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+
+  artifact-uat:
+    name: ${{ matrix.artifact }} UAT (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        artifact: [wheel, sdist]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: distributions
+          path: dist
+
+      - name: Install the selected artifact into a clean environment
+        shell: python
+        env:
+          ARTIFACT_KIND: ${{ matrix.artifact }}
         run: |
-          /tmp/fresh/bin/preflight demo | tee /tmp/demo.txt
-          grep -q "2 loaded, 3 refused" /tmp/demo.txt
+          import os
+          import pathlib
+          import subprocess
+          import venv
 
-      - name: `check` still exits non-zero on a package that would be refused
-        working-directory: /
+          venv.create(".artifact-uat", with_pip=True)
+          scripts = "Scripts" if os.name == "nt" else "bin"
+          python = pathlib.Path(".artifact-uat") / scripts / (
+              "python.exe" if os.name == "nt" else "python"
+          )
+          pattern = "*.whl" if os.environ["ARTIFACT_KIND"] == "wheel" else "*.tar.gz"
+          artifacts = list(pathlib.Path("dist").glob(pattern))
+          if len(artifacts) != 1:
+              raise SystemExit(f"expected one {pattern} artifact, found {artifacts}")
+          subprocess.check_call([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+          subprocess.check_call([str(python), "-m", "pip", "install", str(artifacts[0])])
+
+      - name: Exercise the installed command away from the checkout
+        shell: python
         run: |
-          if /tmp/fresh/bin/preflight check "$GITHUB_WORKSPACE/examples/plugins"; then
-            echo "expected exit 1: trespasser's entrypoint points out of tree" >&2
-            exit 1
-          fi
+          import os
+          import pathlib
+          import subprocess
+
+          scripts = "Scripts" if os.name == "nt" else "bin"
+          command = pathlib.Path(".artifact-uat") / scripts / (
+              "preflight.exe" if os.name == "nt" else "preflight"
+          )
+          outside = pathlib.Path(".artifact-uat-cwd")
+          outside.mkdir()
+          subprocess.check_call([str(command.resolve()), "--version"], cwd=outside)
+          demo = subprocess.run(
+              [str(command.resolve()), "demo"], cwd=outside, text=True, capture_output=True
+          )
+          if demo.returncode != 0 or "2 loaded, 3 refused" not in demo.stdout:
+              raise SystemExit(demo.stdout + demo.stderr)
+          refused = subprocess.run(
+              [str(command.resolve()), "check", str(pathlib.Path("examples/plugins").resolve())],
+              cwd=outside,
+          )
+          if refused.returncode != 1:
+              raise SystemExit(f"check returned {refused.returncode}, expected 1")

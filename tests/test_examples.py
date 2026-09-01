@@ -53,7 +53,9 @@ def test_the_example_host_loads_two_plugins_and_refuses_three():
     # Refused for naming a module outside the trusted root, before importing it.
     assert "outside the trusted plugin root" in output
     # Refused for claiming a tool name greeter already owns, before importing it.
-    assert "tool name collision: 'greeter.hello' is already owned by 'greeter'" in output
+    assert (
+        "tool name collision: 'greeter.hello' is already owned by 'greeter'" in output
+    )
     # Refused for reporting a manifest other than the one it declared. This one is
     # necessarily after the import: there has to be an object to ask. The refusal
     # names the smuggled tool, which is the whole reason the example exists --

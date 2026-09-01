@@ -58,7 +58,7 @@ class _Plugin:
 
 
 def test_a_runtime_mismatch_names_the_field_and_both_values():
-    """"Does not match" alone leaves somebody diffing two files by eye.
+    """ "Does not match" alone leaves somebody diffing two files by eye.
 
     This is the refusal a person meets when a version was bumped in the code and
     not in the manifest, which is the ordinary way to reach it and the one the
@@ -130,8 +130,20 @@ def test_plugin_package_manifest_is_closed_and_has_a_strict_entrypoint():
     assert package.schema_version == "1.0"
     assert package.plugin.plugin_id == "mail.test"
 
-    with pytest.raises(ValidationError):
-        _package(entrypoint="example_mail.plugin")
+    # A bare module is the second legal shape: it waives the runtime-manifest
+    # comparison rather than failing it. See `self_reports_manifest`.
+    assert _package(entrypoint="example_mail.plugin").self_reports_manifest is False
+    assert package.self_reports_manifest is True
+
+    for malformed in (
+        "example_mail.plugin:",  # a colon promising an attribute that is not there
+        ":create_plugin",  # an attribute with no module to find it in
+        "example_mail.plugin:_private",  # a private name is not an entrypoint
+        "example_mail.plugin:create:extra",  # attribute is not an identifier
+        "example_mail..plugin",  # an empty path segment
+    ):
+        with pytest.raises(ValidationError):
+            _package(entrypoint=malformed)
 
     with pytest.raises(ValidationError):
         PluginPackageManifest.model_validate(
@@ -179,9 +191,7 @@ def test_a_plugin_that_does_not_support_the_host_platform_is_refused_before_load
         loaded = True
         return _Plugin(package.plugin)
 
-    registry = public_build(
-        allowed_package_ids={package.package_id}, platform="linux"
-    )
+    registry = public_build(allowed_package_ids={package.package_id}, platform="linux")
     with pytest.raises(PluginRejected, match="does not support platform 'linux'"):
         registry.register(package, loader, origin="test")
 
@@ -258,9 +268,7 @@ def test_registry_loads_a_valid_plugin_and_rejects_manifest_or_tool_collisions()
             other_package, lambda: mismatched, origin="built-in"
         )
 
-    collision = _package(
-        package_id="example.calendar.test", plugin_id="calendar.test"
-    )
+    collision = _package(package_id="example.calendar.test", plugin_id="calendar.test")
     collision.plugin.tools[0].name = package.plugin.tools[0].name
     registry_with_collision_allowlist = public_build(
         allowed_package_ids={package.package_id, collision.package_id},
@@ -314,6 +322,27 @@ def test_a_second_package_claiming_a_registered_plugin_id_is_refused_before_load
     registry.register(first, lambda: _Plugin(first.plugin), origin="built-in")
 
     with pytest.raises(PluginRejected, match="is already registered"):
+        registry.register(second, loader, origin="test")
+
+    assert loaded is False
+    assert len(registry.available()) == 1
+
+
+def test_a_second_plugin_claiming_a_registered_package_id_is_refused_before_loading():
+    first = _package()
+    second = _package(plugin_id="mail.clone")
+    second.plugin.tools[0].name = "mail.clone.search"
+    loaded = False
+
+    def loader():
+        nonlocal loaded
+        loaded = True
+        return _Plugin(second.plugin)
+
+    registry = public_build(allowed_package_ids={first.package_id}, platform="windows")
+    registry.register(first, lambda: _Plugin(first.plugin), origin="built-in")
+
+    with pytest.raises(PluginRejected, match="package .* already registered"):
         registry.register(second, loader, origin="test")
 
     assert loaded is False
@@ -396,9 +425,7 @@ def test_an_oversized_manifest_is_refused_before_it_is_even_parsed(tmp_path: Pat
 def test_invalid_or_restricted_manifest_never_reaches_the_importer(tmp_path: Path):
     trusted_root = tmp_path / "plugins"
     trusted_root.mkdir()
-    restricted_package = _package(
-        visibility="restricted", release_ring="experimental"
-    )
+    restricted_package = _package(visibility="restricted", release_ring="experimental")
     manifest_path = trusted_root / "manifest.json"
     manifest_path.write_text(
         json.dumps(restricted_package.model_dump(mode="json")), encoding="utf-8"

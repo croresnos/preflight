@@ -21,6 +21,14 @@ check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$3] got [$2]
 has()  { if printf '%s' "$2" | grep -qF "$3"; then ok "$1"; else bad "$1" "missing: $3"; fi; }
 hasnt(){ if printf '%s' "$2" | grep -qF "$3"; then bad "$1" "should not contain: $3"; else ok "$1"; fi; }
 section(){ printf "\n\033[1m== %s\033[0m\n" "$1"; }
+venv_python(){
+  if [ -x "$1/Scripts/python.exe" ]; then printf '%s\n' "$1/Scripts/python.exe"
+  else printf '%s\n' "$1/bin/python"; fi
+}
+venv_preflight(){
+  if [ -x "$1/Scripts/preflight.exe" ]; then printf '%s\n' "$1/Scripts/preflight.exe"
+  else printf '%s\n' "$1/bin/preflight"; fi
+}
 
 rm -rf "$UAT"; mkdir -p "$UAT"; cd "$UAT"
 
@@ -29,8 +37,8 @@ section "1. Install from a clean tree"
 mkdir -p tree && (cd "$SRC" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.omc .) | (cd tree && tar -xf -)
 cd tree
 "$PYEXE" -m venv .venv >/dev/null 2>&1
-PY="$UAT/tree/.venv/Scripts/python.exe"
-PF="$UAT/tree/.venv/Scripts/preflight.exe"
+PY=$(venv_python "$UAT/tree/.venv")
+PF=$(venv_preflight "$UAT/tree/.venv")
 "$PY" -m pip install -q -e . 2>&1 | grep -v notice
 "$PY" -m pip install -q pytest 2>&1 | grep -v notice
 check "editable install exposes the console script" "$([ -f "$PF" ] && echo yes)" "yes"
@@ -45,7 +53,11 @@ DEPS=$("$PY" -m pip show preflight-gate 2>/dev/null | grep -i '^Requires:' | sed
 check "exactly one runtime dependency" "$DEPS" "pydantic"
 
 section "2. Test suite in the fresh venv"
-T=$("$PY" -m pytest -q 2>&1 | tail -2)
+T_FILE="$UAT/pytest.txt"
+"$PY" -m pytest -q >"$T_FILE" 2>&1
+T_RC=$?
+T=$(tail -2 "$T_FILE")
+check "suite exits successfully" "$T_RC" "0"
 has "suite passes" "$T" "passed"
 hasnt "no failures" "$T" "failed"
 printf "        %s\n" "$(printf '%s' "$T" | tail -1)"
@@ -56,19 +68,34 @@ section "3. Wheel build -- demo must work from an installed wheel"
 # broken in every wheel, because the examples were not packaged.
 cd "$UAT/tree"
 "$PY" -m pip install -q build 2>&1 | grep -v notice
-"$PY" -m build --wheel -o "$UAT/dist" >/dev/null 2>&1
+"$PY" -m build -o "$UAT/dist" >/dev/null 2>&1
 WHL=$(ls "$UAT/dist"/*.whl 2>/dev/null | head -1)
+SDIST=$(ls "$UAT/dist"/*.tar.gz 2>/dev/null | head -1)
 check "wheel builds" "$([ -n "$WHL" ] && echo yes)" "yes"
+check "sdist builds" "$([ -n "$SDIST" ] && echo yes)" "yes"
+if tar -tf "$SDIST" | grep -Eq '(^|/)(\.omc|\.git|\.coverage|\.pytest_cache)(/|$)'; then
+  bad "sdist excludes local and secret-bearing state" "forbidden path found"
+else
+  ok "sdist excludes local and secret-bearing state"
+fi
 mkdir -p "$UAT/wheeltest" && cd "$UAT/wheeltest"
 "$PYEXE" -m venv .venv >/dev/null 2>&1
-WPY="$UAT/wheeltest/.venv/Scripts/python.exe"
-WPF="$UAT/wheeltest/.venv/Scripts/preflight.exe"
+WPY=$(venv_python "$UAT/wheeltest/.venv")
+WPF=$(venv_preflight "$UAT/wheeltest/.venv")
 "$WPY" -m pip install -q "$WHL" 2>&1 | grep -v notice
 D=$("$WPF" demo 2>&1)
 has "demo runs from a wheel, outside any checkout" "$D" "5 packages found"
 hasnt "demo does not ask you to clone the repo" "$D" "Clone the"
 S=$("$WPF" settings 2>&1)
 has "settings runs from a wheel" "$S" "preflight | settings"
+
+mkdir -p "$UAT/sdisttest" && cd "$UAT/sdisttest"
+"$PYEXE" -m venv .venv >/dev/null 2>&1
+SPY=$(venv_python "$UAT/sdisttest/.venv")
+SPF=$(venv_preflight "$UAT/sdisttest/.venv")
+"$SPY" -m pip install -q "$SDIST" 2>&1 | grep -v notice
+SV=$("$SPF" --version 2>&1)
+check "sdist installs outside the checkout" "$SV" "preflight $VERSION"
 
 # ---------------------------------------------------------------- demo
 section "4. demo -- the refusals that are the product"
@@ -125,7 +152,18 @@ mkdir -p pkgs/good
 cat > pkgs/good/manifest.json <<'EOF'
 {"schema_version":"1.0","package_id":"local.good","core_api_version":"1.0","visibility":"public","release_ring":"stable","entrypoint":"good.plugin:create_plugin","plugin":{"schema_version":"1.0","plugin_id":"good","name":"Good","module_version":"1.0.0","tools":[{"name":"good.pay","risk":"financial"}]}}
 EOF
-touch pkgs/good/__init__.py; echo "raise SystemExit('PLUGIN CODE RAN')" > pkgs/good/plugin.py
+touch pkgs/good/__init__.py
+# The entrypoint has to be genuinely there -- `check` now verifies the attribute
+# half as well as the module half, and a fixture missing it would be testing that
+# instead of what this section is about. The raise stays underneath it: it is the
+# tripwire, and it fires on import whatever is defined above it.
+cat > pkgs/good/plugin.py <<'EOF'
+def create_plugin():
+    return None
+
+
+raise SystemExit('PLUGIN CODE RAN')
+EOF
 "$PF" check pkgs/good >/dev/null 2>&1; check "check exits 0 on coherent paperwork" "$?" "0"
 O=$("$PF" check pkgs/good 2>&1)
 hasnt "check did NOT execute the package" "$O" "PLUGIN CODE RAN"
@@ -269,6 +307,104 @@ O=$("$PF" check exp 2>&1); RC=$?
 check "check exits 1 on a ring this build refuses" "$RC" "1"
 has "and quotes the gate's own sentence" "$O" "from the 'experimental' release ring"
 cd "$UAT/work"
+
+# A folder named after a module the interpreter already owns. The paperwork is
+# perfect and the file is right there, so `check` used to resolve it by path
+# arithmetic and exit 0 -- on a package no host can reach by that name. Two
+# regimes, because the gate reaches them by different routes: `time` is compiled
+# in and reports no file at all, `json` is on disk and resolves to the standard
+# library's copy.
+for NAME in time json; do
+  mkdir -p "$UAT/work/shadow/$NAME" && cd "$UAT/work/shadow/$NAME"
+  : > __init__.py
+  printf 'def create_plugin():\n    return None\n' > plugin.py
+  printf '{"package_id":"probe.%s","core_api_version":"1.0","visibility":"public",' "$NAME" > manifest.json
+  printf '"release_ring":"stable","entrypoint":"%s.plugin:create_plugin",' "$NAME" >> manifest.json
+  printf '"plugin":{"plugin_id":"%s","name":"S","module_version":"1.0.0"}}' "$NAME" >> manifest.json
+  cd "$UAT/work/shadow"
+  O=$("$PF" check "$NAME" 2>&1); RC=$?
+  check "check exits 1 on a folder named '$NAME'" "$RC" "1"
+  has "and says to rename it ($NAME)" "$O" "Rename the plugin folder"
+done
+# The negative half: a name that merely starts with a stdlib word still loads.
+mkdir -p "$UAT/work/shadow/jsonish" && cd "$UAT/work/shadow/jsonish"
+: > __init__.py
+printf 'def create_plugin():\n    return None\n' > plugin.py
+printf '{"package_id":"probe.jsonish","core_api_version":"1.0","visibility":"public",' > manifest.json
+printf '"release_ring":"stable","entrypoint":"jsonish.plugin:create_plugin",' >> manifest.json
+printf '"plugin":{"plugin_id":"jsonish","name":"S","module_version":"1.0.0"}}' >> manifest.json
+cd "$UAT/work/shadow"
+"$PF" check jsonish > /dev/null 2>&1
+check "a name that only looks like stdlib still passes" "$?" "0"
+cd "$UAT/work"
+
+section "13. the entrypoint's two shapes"
+# A package that has never heard of preflight: no create_plugin anywhere. The
+# colon form names an attribute nothing defines, so a host imports it and only
+# then refuses it -- the exact case `check` used to pass with exit 0.
+mkdir -p "$UAT/work/adopt/notepad" && cd "$UAT/work/adopt/notepad"
+cat > __init__.py <<'PYFILE'
+def jot(text):
+    return "noted: " + text
+PYFILE
+cd "$UAT/work/adopt"
+O=$("$PF" create notepad 2>&1)
+has "create says the package does not report its own manifest" "$O" "does not report its own manifest"
+check "and the entrypoint it wrote has no colon" "$(grep -c '"entrypoint": "notepad"' notepad/manifest.json)" "1"
+O=$("$PF" check notepad 2>&1); RC=$?
+check "check exits 0 on the adapted form" "$RC" "0"
+has "and says the waiver out loud" "$O" "adapted by preflight"
+
+# Now point the entrypoint at an attribute that is not there.
+"$PY" - <<'PYFILE'
+import json, pathlib
+p = pathlib.Path("notepad/manifest.json")
+m = json.loads(p.read_text())
+m["entrypoint"] = "notepad:create_plugin"
+p.write_text(json.dumps(m, indent=2))
+PYFILE
+O=$("$PF" check notepad 2>&1); RC=$?
+check "check exits 1 when the named attribute is missing" "$RC" "1"
+has "and files it as a refusal that costs the import" "$O" "AFTER importing it"
+
+# --adapter buys check 17 back, and must not overwrite anybody's Python.
+mkdir -p "$UAT/work/adopt/owned" && cd "$UAT/work/adopt/owned"
+: > __init__.py
+cd "$UAT/work/adopt"
+"$PF" create owned --adapter > /dev/null 2>&1
+check "--adapter writes a plugin.py" "$([ -f owned/plugin.py ] && echo yes || echo no)" "yes"
+"$PF" check owned > /dev/null 2>&1
+check "and the pair it wrote passes check" "$?" "0"
+echo mine > owned/plugin.py
+"$PF" create owned --adapter --force > /dev/null 2>&1
+check "--adapter refuses to overwrite a plugin.py" "$?" "2"
+check "and leaves it alone" "$(cat owned/plugin.py)" "mine"
+cd "$UAT/work"
+
+section "14. try will not take a folder over"
+mkdir -p "$UAT/work/mywork" && cd "$UAT/work"
+echo "my own work" > mywork/host.py
+"$PF" try mywork > /dev/null 2>&1
+check "try refuses a folder it did not write" "$?" "2"
+"$PF" try mywork --force > /dev/null 2>&1
+check "and --force does not override that" "$?" "2"
+check "the hand-written host.py survives" "$(cat mywork/host.py)" "my own work"
+"$PF" try uatbox > /dev/null 2>&1
+check "try writes a fresh sandbox" "$?" "0"
+check "including break.py" "$([ -f uatbox/break.py ] && echo yes || echo no)" "yes"
+"$PF" try uatbox --force > /dev/null 2>&1
+check "and --force still resets its own sandbox" "$?" "0"
+cd "$UAT/work/uatbox"
+"$PY" host.py > /dev/null 2>&1
+check "the sandbox host exits 0 while it loads" "$?" "0"
+"$PY" break.py 2 > /dev/null 2>&1
+"$PY" host.py > /dev/null 2>&1
+check "and non-zero once broken" "$?" "1"
+"$PY" break.py 2 --undo > /dev/null 2>&1
+"$PY" host.py > /dev/null 2>&1
+check "and 0 again after the undo" "$?" "0"
+cd "$UAT/work"
+
 
 printf "\n\033[1m===================== RESULT =====================\033[0m\n"
 printf "  passed: %s\n  failed: %s\n" "$PASS" "$FAIL"

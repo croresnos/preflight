@@ -233,7 +233,7 @@ def test_every_internal_link_points_at_something_that_exists(doc):
 
 
 def test_every_test_the_docs_cite_by_name_actually_exists():
-    """"Every row names the test that proves it. If you doubt a row, run it."
+    """ "Every row names the test that proves it. If you doubt a row, run it."
 
     That sentence is the README's argument for being believed, and it is only
     worth anything while the names resolve. Renaming a test is an ordinary thing
@@ -254,6 +254,49 @@ def test_every_test_the_docs_cite_by_name_actually_exists():
     assert cited, "the docs are supposed to cite tests by name"
 
     missing = sorted(cited - defined)
-    assert not missing, (
-        "the docs name tests that no longer exist:\n  " + "\n  ".join(missing)
+    assert not missing, "the docs name tests that no longer exist:\n  " + "\n  ".join(
+        missing
+    )
+
+
+def test_the_api_reference_names_only_things_that_are_actually_exported():
+    """Section 16 exists because a reader resorted to `dir(preflight)` without it.
+
+    A reference table that has drifted is worse than the `dir()` call it replaced:
+    that at least tells the truth. Both directions are checked -- a name the
+    package no longer exports, and one it has gained that nobody wrote down.
+
+    Against `__all__` rather than `dir()`. `dir()` also reports whichever
+    submodules happen to have been imported by the time this runs, which makes it
+    a fact about the test session; `__all__` is the API the package declares.
+    """
+    import preflight
+
+    section = _read(REPO_ROOT / "docs" / "MANUAL.md").split(
+        "## 16. Everything `import preflight` gives you"
+    )
+    assert len(section) == 2, "section 16 is missing or its heading changed"
+
+    # The tables only. The closing paragraph names the four submodules in order
+    # to say they are *not* the API, and reading it as a citation would make the
+    # section contradict itself.
+    tables = section[1].split("### Not part of the API")[0]
+    # The first column of each table row, and nothing else. Prose mentions do not
+    # count in either direction: the word "manifest" appears in this section as
+    # the name of the `Plugin` protocol's property, which is not a claim that the
+    # `preflight.manifest` submodule is part of the API. A row's first cell is
+    # the only place this section actually declares an export.
+    cited: set[str] = set()
+    for row in re.findall(r"^\| (.+?) \|", tables, re.M):
+        cited |= {span.split("(", 1)[0] for span in _INLINE.findall(row)}
+    exported = set(preflight.__all__)
+
+    missing = sorted(exported - cited)
+    assert not missing, "section 16 does not mention: " + ", ".join(missing)
+
+    invented = sorted(
+        name for name in cited & set(dir(preflight)) if name not in exported
+    )
+    assert not invented, "section 16 names things that are not exported: " + ", ".join(
+        invented
     )

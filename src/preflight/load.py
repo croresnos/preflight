@@ -79,6 +79,11 @@ class Outcome:
     version: str | None = None
     tool_count: int = 0
     reason: str | None = None
+    #: ``False`` when the manifest used a bare entrypoint, so the package never
+    #: stated what it was and there was nothing to check the file against. The
+    #: package still cleared every check that is made from the file. Reported
+    #: because ``LOADED`` should not quietly mean two different things.
+    self_reported: bool = True
 
     @property
     def stage(self) -> str:
@@ -144,6 +149,8 @@ class LoadReport:
                 if outcome.loaded
                 else outcome.stage
             )
+            if outcome.loaded and not outcome.self_reported:
+                detail += "  (adapted; manifest not self-reported)"
             lines.append(f"  {label}  {outcome.folder:<{width}}  {detail}")
             # A reason may run to several lines -- a manifest with three bad
             # fields is a list, not a sentence. Every line of it sits under the
@@ -207,12 +214,16 @@ def load_plugins(
 
     outcomes = [
         _attempt(registry, manifest_path, root)
-        for manifest_path in _in_allow_order(root, allow)
+        for manifest_path in _in_allow_order(
+            root, allow, max_manifest_bytes=settings.max_manifest_bytes
+        )
     ]
     return LoadReport(directory=root, outcomes=tuple(outcomes), registry=registry)
 
 
-def _in_allow_order(root: Path, allow: Iterable[str]) -> list[Path]:
+def _in_allow_order(
+    root: Path, allow: Iterable[str], *, max_manifest_bytes: int
+) -> list[Path]:
     """Order the discovered manifests by the host's allowlist, then by name.
 
     Load order is not cosmetic: the first plugin to claim a tool name keeps it,
@@ -228,6 +239,11 @@ def _in_allow_order(root: Path, allow: Iterable[str]) -> list[Path]:
     by_package_id: dict[str, Path] = {}
     for path in discovered:
         try:
+            # Sorting must not bypass the registry's resource boundary. An
+            # oversized manifest is left in discovery order so the registry can
+            # produce the canonical refusal without this helper reading it.
+            if path.stat().st_size > max_manifest_bytes:
+                continue
             package_id = json.loads(path.read_text(encoding="utf-8"))["package_id"]
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, KeyError):
             continue  # unreadable or malformed; the registry will say so properly
@@ -235,9 +251,9 @@ def _in_allow_order(root: Path, allow: Iterable[str]) -> list[Path]:
 
     ordered: list[Path] = []
     for package_id in allow:
-        path = by_package_id.get(package_id)
-        if path is not None and path not in ordered:
-            ordered.append(path)
+        allowed_path = by_package_id.get(package_id)
+        if allowed_path is not None and allowed_path not in ordered:
+            ordered.append(allowed_path)
     ordered.extend(path for path in discovered if path not in ordered)
     return ordered
 
@@ -259,7 +275,9 @@ def _attempt(registry: PluginRegistry, manifest_path: Path, root: Path) -> Outco
             manifest_path, trusted_root=root, importer=importer
         )
     except PluginRejected as refusal:
-        return Outcome(folder=folder, loaded=False, code_ran=code_ran, reason=str(refusal))
+        return Outcome(
+            folder=folder, loaded=False, code_ran=code_ran, reason=str(refusal)
+        )
 
     plugin = registered.package.plugin
     return Outcome(
@@ -270,4 +288,5 @@ def _attempt(registry: PluginRegistry, manifest_path: Path, root: Path) -> Outco
         name=plugin.name,
         version=plugin.module_version,
         tool_count=len(plugin.tools),
+        self_reported=registered.package.self_reports_manifest,
     )
