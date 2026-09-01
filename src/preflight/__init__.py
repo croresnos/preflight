@@ -136,4 +136,4 @@ __all__ = [
     "trust_json_schema",
 ]
 
-__version__ = "0.8.0a1"
+__version__ = "0.8.0a2"

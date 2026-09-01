@@ -254,7 +254,7 @@ If you doubt a row, run that test; if a row had no test, it would not be in the 
 
 ## Experimental deterministic trust protocol
 
-Version 0.8.0a1 contains the first backend-neutral trust-kernel slice. It is
+Version 0.8.0a2 contains the first backend-neutral trust-kernel slice. It is
 local, deterministic, contains no AI, and introduces project opt-in,
 content-addressed lockfiles, exact approval bindings, stable reason codes, and
 integrity-checked evidence stored outside the repository.

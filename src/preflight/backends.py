@@ -108,7 +108,8 @@ class AlphaBackend:
             "maximum requires the future Hyper-V quarantine service",
         ]
         if windows:
-            version = sys.getwindowsversion()
+            get_windows_version = getattr(sys, "getwindowsversion")
+            version = get_windows_version()
             detail.insert(0, f"Windows build {version.build}")
             detail[1:1] = _windows_primitive_diagnostics()
             if version.build < 22000:
@@ -142,7 +143,11 @@ class AlphaBackend:
             raise ValueError("run command may not be empty")
         timeout = 30 if workload is WorkloadProfile.STANDARD else 300
         started = time.monotonic()
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        flags = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if sys.platform == "win32"
+            else 0
+        )
         # Executing the approved argv is this backend's purpose. It is passed as
         # a list with shell=False; policy and isolation decisions happen first.
         process = subprocess.Popen(  # nosec B603

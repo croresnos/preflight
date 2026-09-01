@@ -5,6 +5,14 @@ while its public API remains pre-1.0.
 
 ## [Unreleased]
 
+## [0.8.0a2] - 2026-09-01
+
+### Fixed
+
+- Corrected the POSIX symlink-confinement fixture so it proves an escape from
+  the trusted root rather than a permitted link within that root.
+- Kept Windows-only runtime diagnostics type-safe when checked on Linux.
+
 ## [0.8.0a1] - 2026-09-01
 
 ### Added
@@ -41,6 +49,7 @@ while its public API remains pre-1.0.
 - Sandbox tutorials require an inventoried ownership marker before reset.
 - Symlinked entrypoint files cannot escape the trusted plugin root.
 
-[Unreleased]: https://github.com/croresnos/preflight/compare/v0.8.0a1...HEAD
+[Unreleased]: https://github.com/croresnos/preflight/compare/v0.8.0a2...HEAD
+[0.8.0a2]: https://github.com/croresnos/preflight/compare/v0.8.0a1...v0.8.0a2
 [0.8.0a1]: https://github.com/croresnos/preflight/compare/v0.7.0...v0.8.0a1
 [0.7.0]: https://github.com/croresnos/preflight/releases/tag/v0.7.0

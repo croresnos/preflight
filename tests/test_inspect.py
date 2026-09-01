@@ -375,8 +375,9 @@ def test_module_binding_analysis_handles_python_binding_forms(
 def test_symlinked_entrypoint_source_outside_the_root_is_refused(tmp_path: Path):
     outside = tmp_path / "outside.py"
     outside.write_text("def create_plugin():\n    return None\n", encoding="utf-8")
+    trusted_root = tmp_path / "plugins"
     folder = _write_package(
-        tmp_path,
+        trusted_root,
         "widget",
         manifest=_manifest(entrypoint="widget.plugin:create_plugin"),
         module=False,
