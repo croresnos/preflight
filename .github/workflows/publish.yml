@@ -116,7 +116,17 @@ jobs:
           filename="$(basename "$wheel")"
           version="${filename#preflight_gate-}"
           version="${version%-py3-none-any.whl}"
-          python -m pip download --no-deps --index-url https://test.pypi.org/simple/ "preflight-gate==${version}" --dest fetched
+          for attempt in {1..12}; do
+            if python -m pip download --pre --no-deps --index-url https://test.pypi.org/simple/ "preflight-gate==${version}" --dest fetched; then
+              break
+            fi
+            if [[ $attempt == 12 ]]; then
+              echo "TestPyPI did not expose preflight-gate==${version} after 12 attempts" >&2
+              exit 1
+            fi
+            echo "Waiting for TestPyPI simple-index propagation (attempt ${attempt}/12)"
+            sleep 10
+          done
           cmp "$wheel" "fetched/$filename"
           python -m venv /tmp/testpypi
           /tmp/testpypi/bin/python -m pip install --upgrade pip
