@@ -105,6 +105,7 @@ def _inspect_tar(path: Path) -> None:
     try:
         with tarfile.open(path, mode="r:gz") as archive:
             members: list[tuple[str, int, int]] = []
+            expanded_bytes = 0
             for member in archive.getmembers():
                 normalized = _safe_archive_name(member.name)
                 if not (member.isfile() or member.isdir()):
@@ -113,7 +114,16 @@ def _inspect_tar(path: Path) -> None:
                     )
                 if member.isfile():
                     members.append((member.name, member.size, member.size))
+                    expanded_bytes += member.size
             _check_archive_members(members, archive_size=path.stat().st_size)
+            # gzip does not expose a compressed byte count per tar member. The
+            # old code passed each member's expanded size as its compressed
+            # size, which made the expansion-ratio check a permanent 1:1 no-op.
+            # Enforce the same bomb bound at the archive level instead.
+            if expanded_bytes >= RATIO_FLOOR_BYTES:
+                compressed_bytes = max(path.stat().st_size, 1)
+                if expanded_bytes / compressed_bytes > MAX_EXPANSION_RATIO:
+                    raise ArtifactError("tar archive has an unsafe expansion ratio")
     except (OSError, tarfile.TarError) as exc:
         raise ArtifactError(f"invalid tar artifact '{path.name}': {exc}") from exc
 

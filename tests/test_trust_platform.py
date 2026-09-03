@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from preflight import trust_cli
 from preflight.artifacts import ArtifactError, identify_artifact
 from preflight.backends import AlphaBackend
 from preflight.cli import main
@@ -351,7 +352,9 @@ def test_cli_lifecycle_records_decisions_and_runs_only_the_exact_artifact(
     tmp_path: Path,
     local_state: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(trust_cli, "default_backend", AlphaBackend)
     project = tmp_path / "project"
     source = tmp_path / "source"
     project.mkdir()
@@ -546,6 +549,15 @@ def test_archive_inspection_rejects_traversal_links_and_bombs(tmp_path: Path) ->
         archive.writestr("demo/zeros.bin", b"0" * (11 * 1024 * 1024))
     with pytest.raises(ArtifactError, match="unsafe expansion ratio"):
         identify_artifact(bomb)
+
+    tar_bomb = tmp_path / "bomb.tar.gz"
+    zeros = b"0" * (11 * 1024 * 1024)
+    with tarfile.open(tar_bomb, "w:gz") as archive:
+        member = tarfile.TarInfo("demo/zeros.bin")
+        member.size = len(zeros)
+        archive.addfile(member, io.BytesIO(zeros))
+    with pytest.raises(ArtifactError, match="unsafe expansion ratio"):
+        identify_artifact(tar_bomb)
 
     tar_link = tmp_path / "linked.tar.gz"
     with tarfile.open(tar_link, "w:gz") as archive:

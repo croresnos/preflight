@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "active": false,
+  "reason_code": "acceptance_pending",
+  "required": {
+    "authenticated_scm_pipe": false,
+    "caller_token_launch": false,
+    "suspended_before_assignment": false,
+    "hostile_fixtures": false,
+    "failure_injection": false,
+    "parser_mutation": false,
+    "identity_and_handle_audit": false,
+    "negative_controls": false,
+    "signed_evidence_and_recovery": false,
+    "windows_11_privileged_uat": false
+  }
+}

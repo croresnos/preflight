@@ -4,6 +4,10 @@ Status: design contract for the next implementation phase. No current command
 may claim Standard or Maximum isolation until the corresponding acceptance
 tests in this document pass on a clean Windows 11 machine.
 
+The earlier resource-only slice is governed separately by
+ADR-0001-BLAST-CHAMBERS-RESOURCE-BOUNDARY.md and the Blast Chambers threat
+model. Job Object resource enforcement does not satisfy any Standard control.
+
 ## Boundary
 
 The Python package remains an unprivileged client and deterministic policy

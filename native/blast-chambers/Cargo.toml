@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/service",
+    "crates/client",
+    "fixtures/hostile",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.96"
+
+[workspace.dependencies]
+blast-chambers-protocol = { path = "crates/protocol", version = "=0.1.0" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.10.9"
+thiserror = "2.0.18"
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
