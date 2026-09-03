@@ -3,3 +3,9 @@
 /.github/workflows/ @croresnos
 /src/preflight/ @croresnos
 /scripts/ @croresnos
+/native/blast-chambers/ @croresnos
+/src/preflight/trust.py @croresnos
+/src/preflight/blast_chambers.py @croresnos
+/docs/security/ @croresnos
+/docs/architecture/ @croresnos
+/SECURITY.md @croresnos

@@ -1,0 +1,16 @@
+[package]
+name = "blast-chambers-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blast-chambers-protocol.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+windows-sys.workspace = true
+
+[lints]
+workspace = true

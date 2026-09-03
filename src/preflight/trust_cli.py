@@ -9,6 +9,7 @@ from pathlib import Path
 
 from preflight.artifacts import ArtifactError, identify_artifact
 from preflight.backends import default_backend
+from preflight.blast_chambers import doctor_status
 from preflight.policy import evaluate
 from preflight.project import (
     ProjectError,
@@ -112,7 +113,9 @@ def _status(args: argparse.Namespace) -> int:
 def _doctor(args: argparse.Namespace) -> int:
     capabilities = default_backend().capabilities()
     if args.json:
-        print(_json(capabilities))
+        value = capabilities.model_dump(mode="json")
+        value["blast_chambers"] = doctor_status()
+        print(_json(value))
     else:
         print("preflight | backend capabilities")
         print(f"  backend    {capabilities.backend_id}")
@@ -123,6 +126,8 @@ def _doctor(args: argparse.Namespace) -> int:
         print("  maximum    unavailable")
         for detail in capabilities.detail:
             print(f"  - {detail}")
+        native = doctor_status()
+        print(f"  blast chambers  {native['reason_code']}")
     return 0
 
 
@@ -327,16 +332,15 @@ def _run(args: argparse.Namespace) -> int:
             tier=tier,
             workload=policy.capabilities.workload,
         )
-        append_evidence(
-            policy,
-            "run.completed",
-            {
-                "tier": tier.value,
-                "returncode": result.returncode,
-                "timed_out": result.timed_out,
-                "elapsed_seconds": result.elapsed_seconds,
-            },
-        )
+        completed_evidence: dict[str, object] = {
+            "tier": tier.value,
+            "returncode": result.returncode,
+            "timed_out": result.timed_out,
+            "elapsed_seconds": result.elapsed_seconds,
+        }
+        if result.native_evidence is not None:
+            completed_evidence["blast_chambers"] = result.native_evidence
+        append_evidence(policy, "run.completed", completed_evidence)
     except (ProjectError, ArtifactError, ValueError, OSError) as exc:
         print(f"preflight: {exc}", file=sys.stderr)
         return 2

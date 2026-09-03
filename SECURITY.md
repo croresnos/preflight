@@ -35,3 +35,10 @@ the key and records. Adversary-resistant audit custody requires the future
 authenticated Blast Chambers service and OS-protected key storage. `preflight
 doctor` reports the guarantees actually available and Standard/Maximum requests
 fail closed.
+
+The in-development Blast Chambers resource-only backend is not active merely
+because its native workspace builds. Its intended and excluded guarantees,
+fail-closed lifecycle, and activation evidence are defined in
+docs/security/BLAST_CHAMBERS_THREAT_MODEL.md. Until every activation gate is
+proven, the doctor command reports the native backend as pending or
+backend_unavailable.

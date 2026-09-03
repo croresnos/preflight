@@ -166,4 +166,90 @@ jobs:
               cwd=outside,
           )
           if refused.returncode != 1:
-              raise SystemExit(f"check returned {refused.returncode}, expected 1")
+            raise SystemExit(f"check returned {refused.returncode}, expected 1")
+
+  native:
+    name: Blast Chambers Rust gates
+    runs-on: windows-2025
+    defaults:
+      run:
+        working-directory: native/blast-chambers
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Verify pinned formatter
+        run: cargo fmt --all -- --check
+      - name: Deny Rust warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test protocol, lifecycle, and all native targets
+        run: cargo test --workspace --all-targets -j 1
+      - name: Prove the unaccepted backend stays unavailable
+        shell: pwsh
+        run: |
+          $status = cargo run --quiet -p blast-chambers-client -- doctor --json |
+            ConvertFrom-Json
+          if ($status.reason_code -ne "backend_unavailable") {
+            throw "native backend activated without acceptance proof"
+          }
+          if ($status.identity_verified) {
+            throw "uninstalled client claimed a verified service identity"
+          }
+
+  rust-security:
+    name: Rust dependency security and policy
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: native/blast-chambers
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          rust-version: "1.96"
+          manifest-path: native/blast-chambers/Cargo.toml
+          arguments: --all-features --config native/blast-chambers/deny.toml
+          command: check advisories bans licenses sources
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, rust]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: github/codeql-action/init@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
+
+  merge-gate:
+    name: merge gate
+    if: ${{ always() }}
+    needs: [test, quality, build, artifact-uat, native, rust-security, codeql]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every dependency to succeed
+        shell: python
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          import json
+          import os
+
+          results = {
+              name: job["result"]
+              for name, job in json.loads(os.environ["NEEDS_JSON"]).items()
+          }
+          failed = {name: result for name, result in results.items() if result != "success"}
+          if failed:
+              raise SystemExit(f"merge gate refused: {failed}")
+          print(f"merge gate accepted: {results}")

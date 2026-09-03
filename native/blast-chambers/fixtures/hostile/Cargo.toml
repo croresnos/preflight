@@ -1,0 +1,33 @@
+[package]
+name = "blast-chambers-hostile-fixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bc-infinite-loop"
+path = "src/bin/infinite-loop.rs"
+
+[[bin]]
+name = "bc-memory-hog"
+path = "src/bin/memory-hog.rs"
+
+[[bin]]
+name = "bc-process-storm"
+path = "src/bin/process-storm.rs"
+
+[[bin]]
+name = "bc-crash"
+path = "src/bin/crash.rs"
+
+[[bin]]
+name = "bc-output-flood"
+path = "src/bin/output-flood.rs"
+
+[[bin]]
+name = "bc-child-tree"
+path = "src/bin/child-tree.rs"

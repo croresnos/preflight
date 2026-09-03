@@ -66,6 +66,7 @@ $RECYCLE.BIN/
 .release-tmp/
 .omc/
 .preflight/
+native/blast-chambers/target/
 
 # preflight.toml and preflight.lock are intentionally not ignored: project
 # policy and byte-bound dependency state belong in version control.
