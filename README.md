@@ -1,15 +1,53 @@
 # preflight
 
-**Decide whether a plugin is allowed to load by reading its manifest file — before a single line of the plugin's code runs.**
+**A fail-closed gate for Python plugins: decide what may load before the import
+runs somebody else's code.**
+
+> **Project status: active alpha.** The Python plugin gate works, is published on
+> PyPI, and is the part you can use today. The broader artifact-approval protocol
+> is experimental. The Windows isolation service is under construction and is
+> deliberately unavailable until its security tests pass.
+
+## In plain English
+
+Importing a Python module executes it. A load-then-inspect design is already too
+late.
+
+preflight moves the decision in front of the import. A plugin describes itself in
+an inert `manifest.json`; the host supplies an explicit allowlist and policy; and
+preflight either imports the plugin or returns a refusal with the reason. Think of
+it as a bouncer for a plugin folder, not a guard watching the plugin after it gets
+inside.
+
+### What exists today
+
+| Area | Status | What it actually does |
+|---|---|---|
+| Python plugin gate | **Working; published** | Checks a closed manifest, allowlist, platform, release tier, declared tool risk, name collisions, and entrypoint confinement before import. It re-checks the loaded object afterwards and rolls back a refused registration. |
+| Inspection CLI | **Working; published** | `check`, `create`, `try`, `demo`, and `settings` make the gate inspectable and usable in CI. |
+| Artifact trust protocol | **Experimental in 0.8 alpha** | Hashes local directories, wheels, and source archives; binds an approval to the exact bytes, dependency graph, command, policy, project, and requested tier; records stable refusal reasons and local integrity evidence. |
+| Windows Blast Chambers | **Not active** | A Rust protocol and Job Object foundation is under review in PR #7. It is not merged or usable. The service, secure transport, staging, identity boundary, and hostile acceptance suite are not finished. |
+
+### What it does not do
+
+- It does not decide whether code is trustworthy, scan for malware, or review source.
+- It does not contain a plugin after import. Accepted Python runs with the host
+  process's permissions.
+- It does not currently gate packages from PyPI or npm, MCP servers, or remote
+  agent tools.
+- It does not currently provide a usable Windows sandbox. Standard and Maximum
+  isolation are designs and acceptance contracts, not shipped capabilities.
+- It is not finished. The narrow plugin gate is real; the larger trust and
+  containment platform is still being built.
 
 ### Is this for you?
 
 **Does your Python program load plugins from a folder?** If not, preflight has no
 job in it, and the rest of this page will not change that.
 
-preflight is a library. There is no app, no daemon, and no config file. You add one
+For the plugin gate, preflight is a library. There is no app or daemon. You add one
 function call to your program's startup, and from then on it decides which plugins
-may be imported. That is the whole product.
+may be imported.
 
 It needs exactly three things:
 
@@ -18,8 +56,6 @@ It needs exactly three things:
    application requires one, or by you with `preflight create`.
 3. Your startup code calls `load_plugins`.
 
-**What it is not:** it does not gate pip packages, npm packages, MCP servers, or an
-agent's built-in tools. It does not read plugin code, so it cannot detect malware.
 It is a permission system for a plugin folder you own — the same shape as a browser
 extension manifest.
 
@@ -363,9 +399,15 @@ python -m pytest -q
 
 ## A note on how this was built
 
-Built with AI assistance. The threat model, the confinement design, and the decision
-to fail closed on any module that cannot be proven in-tree are mine — as is every
-line I would be asked to defend.
+I am building Preflight with AI assistance. It is also how I am learning the
+engineering around AI and extensible systems: writing the harness, turning a
+threat model into acceptance tests, making policy decisions observable, and
+refusing to claim a boundary before it has been proven.
+
+AI helps me implement, test, and review. I set the scope, choose the tradeoffs,
+write the acceptance criteria, and own the result. The unfinished parts stay
+labelled unfinished because directing an AI system includes knowing what not to
+claim.
 
 ## License
 
