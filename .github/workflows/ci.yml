@@ -167,3 +167,26 @@ jobs:
           )
           if refused.returncode != 1:
               raise SystemExit(f"check returned {refused.returncode}, expected 1")
+
+  merge-gate:
+    name: merge gate
+    if: ${{ always() }}
+    needs: [test, quality, build, artifact-uat]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every dependency to succeed
+        shell: python
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          import json
+          import os
+
+          results = {
+              name: job["result"]
+              for name, job in json.loads(os.environ["NEEDS_JSON"]).items()
+          }
+          failed = {name: result for name, result in results.items() if result != "success"}
+          if failed:
+              raise SystemExit(f"merge gate refused: {failed}")
+          print(f"merge gate accepted: {results}")
