@@ -1,0 +1,42 @@
+{
+  "instructions": "preflight is a fail-closed security tool. Its central claim is that a control is either proven or reported as pending -- never assumed. When reviewing, hold the change to the standards the repository already states in CONTRIBUTING.md, SECURITY.md and docs/security/BLAST_CHAMBERS_THREAT_MODEL.md, and cite the sentence you are applying. Treat native/blast-chambers/fixtures/hostile/ as intentional: those programs are supposed to crash, hang and exhaust memory, because they are the test inputs for the sandbox.",
+  "excludeAuthors": [
+    "dependabot[bot]"
+  ],
+  "rules": [
+    {
+      "id": "no-unrecorded-failure",
+      "rule": "Every failure on a backend execution path must end in a recorded outcome: either a backend_unavailable refusal or a run.completed evidence record. Flag any exception type that can escape an execution path to the CLI without being converted into one of those, including exceptions not covered by an except clause that was written to catch that failure mode. An exception that reaches the CLI destroys the evidence the refusal existed to produce.",
+      "scope": [
+        "src/**"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "no-self-attested-control",
+      "rule": "A security control may never be treated as proven on the strength of the subject's own report. Flag any place where an identity, a version, a capability flag or a sealed/verified marker is accepted because the component under test declared it, where a signature field is required to be present but never verified, or where a digest is stored without being bound to the request and output it is supposed to cover. Existence of a field is not proof of the property it names.",
+      "scope": [
+        "src/**",
+        "native/**"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "manifest-matches-threat-model",
+      "rule": "Every criterion named in the Activation rule of docs/security/BLAST_CHAMBERS_THREAT_MODEL.md must exist as a key in native/blast-chambers/acceptance/activation.json. Read both and report every criterion present in the prose and absent from the manifest, and every manifest key with no counterpart in the prose. List them all, not the first one found.",
+      "scope": [
+        "native/**"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "negative-test-required",
+      "rule": "A change to an enforcement branch must ship with a test that fails when that branch is weakened. A test that only asserts the current value of a constant, or that only exercises the success path, is not a negative test. Flag added or modified enforcement logic that has no such test.",
+      "scope": [
+        "src/**",
+        "native/**"
+      ],
+      "severity": "medium"
+    }
+  ]
+}

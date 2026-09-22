@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "path": "docs/security/BLAST_CHAMBERS_THREAT_MODEL.md",
+      "description": "Authoritative threat model for the Blast Chambers sandbox. Defines the refusal contract and the Activation rule listing every criterion that must hold before the subsystem may report available."
+    },
+    {
+      "path": "native/blast-chambers/acceptance/activation.json",
+      "description": "The activation manifest. Each key is one acceptance criterion gating the sandbox. Compare it against the Activation rule in the threat model."
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "description": "States the two standards this repository reviews against: preserve the distinction between facts known before import and failures discovered after an import attempt, and ship a negative test with every security fix."
+    },
+    {
+      "path": "SECURITY.md",
+      "description": "Supported versions and the disclosure process."
+    }
+  ]
+}
